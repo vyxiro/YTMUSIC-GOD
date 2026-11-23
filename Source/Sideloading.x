@@ -4,6 +4,7 @@
 #import <rootless.h>
 #import "Source/Headers/YTAlertView.h"
 #import "Source/Headers/Localization.h"
+#import "Source/Utils/MSHookMessageEx.h"
 
 #define YT_BUNDLE_ID @"com.google.ios.youtubemusic"
 #define YT_BUNDLE_NAME @"YouTubeMusic"
