@@ -2,18 +2,13 @@
 #import "ThemeManager.h"
 #import <QuartzCore/QuartzCore.h>
 
-static NSString * const kAmbientPrefsKey = @"YTMAppleStyleEnhancer_AmbientPrefs";
-static NSString * const kAmbientEnabledKey = @"ambientGlowEnabled";
-static NSString * const kAmbientIntensityKey = @"glowIntensity";
-
 @interface AmbientView ()
 
-@property (nonatomic, strong) CAGradientLayer *primaryGlowLayer;
-@property (nonatomic, strong) CAGradientLayer *secondaryGlowLayer;
-@property (nonatomic, strong) UIVisualEffectView *blurView;
-@property (nonatomic, strong) UIView *blackBaseView;
-@property (nonatomic, strong) UIColor *currentDominantColor;
-@property (nonatomic, strong) UIColor *currentSecondaryColor;
+@property (nonatomic, strong) CAGradientLayer *backgroundGradientLayer;
+@property (nonatomic, strong) CALayer *blobALayer;
+@property (nonatomic, strong) CALayer *blobBLayer;
+@property (nonatomic, strong) UIVisualEffectView *diffuseBlurView;
+@property (nonatomic, strong) UIImage *lastProcessedArtwork;
 
 @end
 
@@ -22,238 +17,237 @@ static NSString * const kAmbientIntensityKey = @"glowIntensity";
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        [self loadPreferences];
-        [self setupViewHierarchy];
+        self.glowEnabled = YES;
+        self.glowIntensity = 0.75f;
+        [self setupLiquidGlassLayers];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleThemeChanged)
+                                                     name:YTMLiquidThemeDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
 
-- (void)loadPreferences {
-    NSDictionary *prefs = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kAmbientPrefsKey];
-    if (prefs) {
-        self.glowEnabled = prefs[kAmbientEnabledKey] ? [prefs[kAmbientEnabledKey] boolValue] : YES;
-        self.glowIntensity = prefs[kAmbientIntensityKey] ? [prefs[kAmbientIntensityKey] floatValue] : 0.65f;
-    } else {
-        self.glowEnabled = YES;
-        self.glowIntensity = 0.65f;
-        [self savePreferences];
-    }
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-- (void)savePreferences {
-    NSMutableDictionary *prefs = [NSMutableDictionary dictionary];
-    prefs[kAmbientEnabledKey] = @(self.glowEnabled);
-    prefs[kAmbientIntensityKey] = @(self.glowIntensity);
-    [[NSUserDefaults standardUserDefaults] setObject:prefs forKey:kAmbientPrefsKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-}
-
-- (void)setGlowEnabled:(BOOL)glowEnabled {
-    _glowEnabled = glowEnabled;
-    self.hidden = !glowEnabled;
-    [self savePreferences];
-}
-
-- (void)setGlowIntensity:(CGFloat)glowIntensity {
-    _glowIntensity = MAX(0.1f, MIN(1.0f, glowIntensity));
-    [self updateGlowLayersAnimated:NO];
-    [self savePreferences];
-}
-
-- (void)setupViewHierarchy {
+- (void)setupLiquidGlassLayers {
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.clipsToBounds = YES;
     self.userInteractionEnabled = NO;
 
-    // Pitch-black base layer matching OLED `#000000`
-    self.blackBaseView = [[UIView alloc] initWithFrame:self.bounds];
-    self.blackBaseView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.blackBaseView.backgroundColor = [[ThemeManager sharedManager] oledBackgroundColor];
-    [self addSubview:self.blackBaseView];
+    ThemeManager *tm = [ThemeManager sharedManager];
 
-    // Primary ambient glow gradient
-    self.primaryGlowLayer = [CAGradientLayer layer];
-    self.primaryGlowLayer.frame = self.bounds;
-    self.primaryGlowLayer.type = kCAGradientLayerRadial;
-    self.primaryGlowLayer.startPoint = CGPointMake(0.5, 0.35);
-    self.primaryGlowLayer.endPoint = CGPointMake(1.2, 1.2);
-    [self.layer addSublayer:self.primaryGlowLayer];
+    // 1. 170-degree Linear Gradient Background: linear-gradient(170deg, var(--b1), var(--b2))
+    self.backgroundGradientLayer = [CAGradientLayer layer];
+    self.backgroundGradientLayer.frame = self.bounds;
+    self.backgroundGradientLayer.startPoint = CGPointMake(0.35, 0.0);
+    self.backgroundGradientLayer.endPoint = CGPointMake(0.65, 1.0);
+    self.backgroundGradientLayer.colors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor2].CGColor];
+    [self.layer addSublayer:self.backgroundGradientLayer];
 
-    // Secondary ambient accent glow layer
-    self.secondaryGlowLayer = [CAGradientLayer layer];
-    self.secondaryGlowLayer.frame = self.bounds;
-    self.secondaryGlowLayer.type = kCAGradientLayerRadial;
-    self.secondaryGlowLayer.startPoint = CGPointMake(0.65, 0.6);
-    self.secondaryGlowLayer.endPoint = CGPointMake(1.4, 1.4);
-    [self.layer addSublayer:self.secondaryGlowLayer];
+    // 2. Blob A: width 210, height 210, top: -40, right: -60, background: var(--a1), opacity: 0.75
+    self.blobALayer = [CALayer layer];
+    self.blobALayer.cornerRadius = 105;
+    self.blobALayer.opacity = 0.75f;
+    self.blobALayer.backgroundColor = [tm accentColor1].CGColor;
+    [self.layer addSublayer:self.blobALayer];
 
-    // Soft Gaussian blur overlay for liquid light diffusion
-    UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-    self.blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
-    self.blurView.frame = self.bounds;
-    self.blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.blurView.alpha = 0.55f;
-    [self addSubview:self.blurView];
+    // 3. Blob B: width 190, height 190, top: 260, left: -70, background: var(--a2), opacity: 0.55
+    self.blobBLayer = [CALayer layer];
+    self.blobBLayer.cornerRadius = 95;
+    self.blobBLayer.opacity = 0.55f;
+    self.blobBLayer.backgroundColor = [tm accentColor2].CGColor;
+    [self.layer addSublayer:self.blobBLayer];
 
-    // Initial default soft colors
-    self.currentDominantColor = [UIColor colorWithRed:0.12f green:0.12f blue:0.18f alpha:1.0f];
-    self.currentSecondaryColor = [UIColor colorWithRed:0.08f green:0.08f blue:0.14f alpha:1.0f];
-    [self updateGlowLayersAnimated:NO];
+    // 4. Liquid Glass Blur Overlay (filter: blur(38px))
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:tm.isLightMode ? UIBlurEffectStyleLight : UIBlurEffectStyleDark];
+    self.diffuseBlurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    self.diffuseBlurView.frame = self.bounds;
+    self.diffuseBlurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.diffuseBlurView.alpha = 0.70f;
+    [self addSubview:self.diffuseBlurView];
+
+    [self updateBlobLayout];
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    self.primaryGlowLayer.frame = self.bounds;
-    self.secondaryGlowLayer.frame = self.bounds;
-    self.blackBaseView.frame = self.bounds;
-    self.blurView.frame = self.bounds;
+    self.backgroundGradientLayer.frame = self.bounds;
+    self.diffuseBlurView.frame = self.bounds;
+    [self updateBlobLayout];
 }
 
-- (void)applyThemeUpdates {
-    self.blackBaseView.backgroundColor = [[ThemeManager sharedManager] oledBackgroundColor];
+- (void)updateBlobLayout {
+    CGFloat w = self.bounds.size.width;
+    // Blob A: top -40, right -60
+    self.blobALayer.frame = CGRectMake(w - 150, -40, 210, 210);
+    // Blob B: top 260, left -70
+    self.blobBLayer.frame = CGRectMake(-70, 260, 190, 190);
 }
 
-#pragma mark - Artwork Color Analysis
+- (void)handleThemeChanged {
+    [self applyThemeColorsAnimated:YES];
+}
 
-- (void)updateWithArtworkImage:(nullable UIImage *)image animated:(BOOL)animated {
-    if (!self.glowEnabled) return;
+- (void)applyThemeColorsAnimated:(BOOL)animated {
+    ThemeManager *tm = [ThemeManager sharedManager];
 
-    if (!image) {
-        self.currentDominantColor = [UIColor colorWithRed:0.05f green:0.05f blue:0.08f alpha:1.0f];
-        self.currentSecondaryColor = [UIColor blackColor];
-        [self updateGlowLayersAnimated:animated];
+    if (tm.isStaticMode) {
+        self.blobALayer.hidden = YES;
+        self.blobBLayer.hidden = YES;
+        self.diffuseBlurView.hidden = YES;
+        self.backgroundGradientLayer.colors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor1].CGColor];
         return;
     }
 
+    self.blobALayer.hidden = NO;
+    self.blobBLayer.hidden = NO;
+    self.diffuseBlurView.hidden = NO;
+
+    NSArray *newBgColors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor2].CGColor];
+    CGColorRef newA1 = [tm accentColor1].CGColor;
+    CGColorRef newA2 = [tm accentColor2].CGColor;
+
+    if (animated) {
+        CFTimeInterval duration = 1.8; // Exact transition from user CSS spec (1.8s ease)
+        CAMediaTimingFunction *ease = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+
+        CABasicAnimation *bgAnim = [CABasicAnimation animationWithKeyPath:@"colors"];
+        bgAnim.fromValue = self.backgroundGradientLayer.colors;
+        bgAnim.toValue = newBgColors;
+        bgAnim.duration = duration;
+        bgAnim.timingFunction = ease;
+        [self.backgroundGradientLayer addAnimation:bgAnim forKey:@"bgAnim"];
+
+        CABasicAnimation *blobAAnim = [CABasicAnimation animationWithKeyPath:@"backgroundColor"];
+        blobAAnim.fromValue = (id)self.blobALayer.backgroundColor;
+        blobAAnim.toValue = (__bridge id)newA1;
+        blobAAnim.duration = duration;
+        blobAAnim.timingFunction = ease;
+        [self.blobALayer addAnimation:blobAAnim forKey:@"blobAAnim"];
+
+        CABasicAnimation *blobBAnim = [CABasicAnimation animationWithKeyPath:@"backgroundColor"];
+        blobBAnim.fromValue = (id)self.blobBLayer.backgroundColor;
+        blobBAnim.toValue = (__bridge id)newA2;
+        blobBAnim.duration = duration;
+        blobBAnim.timingFunction = ease;
+        [self.blobBLayer addAnimation:blobBAnim forKey:@"blobBAnim"];
+    }
+
+    self.backgroundGradientLayer.colors = newBgColors;
+    self.blobALayer.backgroundColor = newA1;
+    self.blobBLayer.backgroundColor = newA2;
+}
+
+#pragma mark - Artwork Color Analysis for Ambient Mode
+
+- (void)updateWithArtworkImage:(nullable UIImage *)image animated:(BOOL)animated {
+    if (!self.glowEnabled || !image) return;
+    if (self.lastProcessedArtwork == image) return;
+    self.lastProcessedArtwork = image;
+
+    ThemeManager *tm = [ThemeManager sharedManager];
+    if (tm.liquidTheme != YTMLiquidThemeAmbient) return;
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSArray<UIColor *> *extractedColors = [self extractDominantColorsFromImage:image];
-        UIColor *dominant = extractedColors.firstObject;
-        UIColor *secondary = (extractedColors.count > 1) ? extractedColors[1] : [dominant colorWithAlphaComponent:0.7f];
+        CGSize thumbSize = CGSizeMake(20, 20);
+        UIGraphicsBeginImageContextWithOptions(thumbSize, NO, 1.0f);
+        [image drawInRect:CGRectMake(0, 0, thumbSize.width, thumbSize.height)];
+        UIImage *thumbnail = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+
+        CGImageRef cgImage = thumbnail.CGImage;
+        if (!cgImage) return;
+
+        size_t width = CGImageGetWidth(cgImage);
+        size_t height = CGImageGetHeight(cgImage);
+        size_t bytesPerRow = width * 4;
+        uint8_t *rawData = (uint8_t *)calloc(height * bytesPerRow, sizeof(uint8_t));
+        if (!rawData) return;
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+        CGContextRef context = CGBitmapContextCreate(rawData, width, height, 8, bytesPerRow, colorSpace,
+                                                     kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(colorSpace);
+        if (!context) {
+            free(rawData);
+            return;
+        }
+
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), cgImage);
+        CGContextRelease(context);
+
+        UIColor *cand1 = nil;
+        UIColor *cand2 = nil;
+        CGFloat maxScore1 = -1.0;
+        CGFloat maxScore2 = -1.0;
+
+        for (size_t y = 0; y < height; y++) {
+            for (size_t x = 0; x < width; x++) {
+                size_t idx = (y * bytesPerRow) + (x * 4);
+                CGFloat r = rawData[idx] / 255.0f;
+                CGFloat g = rawData[idx + 1] / 255.0f;
+                CGFloat b = rawData[idx + 2] / 255.0f;
+
+                UIColor *color = [UIColor colorWithRed:r green:g blue:b alpha:1.0f];
+                CGFloat h, s, v, a;
+                [color getHue:&h saturation:&s brightness:&v alpha:&a];
+
+                if (v < 0.20 || v > 0.95 || s < 0.25) continue;
+
+                CGFloat score = (s * 0.60) + (v * 0.40);
+                if (score > maxScore1) {
+                    maxScore2 = maxScore1;
+                    cand2 = cand1;
+                    maxScore1 = score;
+                    cand1 = color;
+                } else if (score > maxScore2) {
+                    maxScore2 = score;
+                    cand2 = color;
+                }
+            }
+        }
+        free(rawData);
+
+        if (!cand1) cand1 = [ThemeManager colorFromHexString:@"#19D3B0"];
+        if (!cand2) cand2 = [cand1 colorWithAlphaComponent:0.75];
+
+        // Derive subtle dark gradient bases
+        CGFloat r1, g1, b1, a1;
+        [cand1 getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+        UIColor *derivedB1 = [UIColor colorWithRed:r1 * 0.12 green:g1 * 0.12 blue:b1 * 0.12 alpha:1.0];
+        UIColor *derivedB2 = [UIColor colorWithRed:r1 * 0.18 green:g1 * 0.18 blue:b1 * 0.18 alpha:1.0];
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.currentDominantColor = dominant;
-            self.currentSecondaryColor = secondary;
-            [self updateGlowLayersAnimated:animated];
+            [tm updateAmbientColorsWithAccent1:cand1 accent2:cand2 base1:derivedB1 base2:derivedB2];
+            [self applyThemeColorsAnimated:animated];
         });
     });
 }
 
-- (void)updateGlowLayersAnimated:(BOOL)animated {
-    if (!self.currentDominantColor) return;
+#pragma mark - Liquid Glass Helper (Matching .glass CSS spec)
 
-    CGFloat intensity = self.glowIntensity;
-    UIColor *topColor = [self.currentDominantColor colorWithAlphaComponent:0.75f * intensity];
-    UIColor *midColor = [self.currentDominantColor colorWithAlphaComponent:0.35f * intensity];
-    UIColor *clearColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.0f];
++ (void)applyLiquidGlassToView:(UIView *)view cornerRadius:(CGFloat)radius {
+    if (!view) return;
 
-    NSArray *primaryColors = @[(id)topColor.CGColor, (id)midColor.CGColor, (id)clearColor.CGColor];
+    ThemeManager *tm = [ThemeManager sharedManager];
 
-    UIColor *secTop = [self.currentSecondaryColor colorWithAlphaComponent:0.60f * intensity];
-    UIColor *secMid = [self.currentSecondaryColor colorWithAlphaComponent:0.25f * intensity];
-    NSArray *secondaryColors = @[(id)secTop.CGColor, (id)secMid.CGColor, (id)clearColor.CGColor];
+    view.layer.cornerRadius = radius;
+    view.layer.masksToBounds = NO;
 
-    if (animated) {
-        CABasicAnimation *animPrimary = [CABasicAnimation animationWithKeyPath:@"colors"];
-        animPrimary.fromValue = self.primaryGlowLayer.colors;
-        animPrimary.toValue = primaryColors;
-        animPrimary.duration = 1.2;
-        animPrimary.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [self.primaryGlowLayer addAnimation:animPrimary forKey:@"colorsChange"];
+    // Background fill & border
+    view.backgroundColor = [tm glassBackgroundColor];
+    view.layer.borderWidth = 1.0f;
+    view.layer.borderColor = [tm glassBorderColor].CGColor;
 
-        CABasicAnimation *animSecondary = [CABasicAnimation animationWithKeyPath:@"colors"];
-        animSecondary.fromValue = self.secondaryGlowLayer.colors;
-        animSecondary.toValue = secondaryColors;
-        animSecondary.duration = 1.2;
-        animSecondary.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [self.secondaryGlowLayer addAnimation:animSecondary forKey:@"colorsChange"];
-    }
-
-    self.primaryGlowLayer.colors = primaryColors;
-    self.secondaryGlowLayer.colors = secondaryColors;
-}
-
-- (NSArray<UIColor *> *)extractDominantColorsFromImage:(UIImage *)image {
-    // Downscale image to a tiny 20x20 pixel matrix to extract dominant colors fast without CPU spikes
-    CGSize thumbSize = CGSizeMake(20, 20);
-    UIGraphicsBeginImageContextWithOptions(thumbSize, NO, 1.0f);
-    [image drawInRect:CGRectMake(0, 0, thumbSize.width, thumbSize.height)];
-    UIImage *thumbnail = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-
-    CGImageRef cgImage = thumbnail.CGImage;
-    if (!cgImage) {
-        return @[[UIColor colorWithWhite:0.2f alpha:1.0f], [UIColor blackColor]];
-    }
-
-    size_t width = CGImageGetWidth(cgImage);
-    size_t height = CGImageGetHeight(cgImage);
-    size_t bytesPerPixel = 4;
-    size_t bytesPerRow = bytesPerPixel * width;
-    size_t bitsPerComponent = 8;
-
-    uint8_t *rawData = (uint8_t *)calloc(height * bytesPerRow, sizeof(uint8_t));
-    if (!rawData) {
-        return @[[UIColor colorWithWhite:0.2f alpha:1.0f], [UIColor blackColor]];
-    }
-
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreate(rawData, width, height,
-                                                 bitsPerComponent, bytesPerRow, colorSpace,
-                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-    CGColorSpaceRelease(colorSpace);
-
-    if (!context) {
-        free(rawData);
-        return @[[UIColor colorWithWhite:0.2f alpha:1.0f], [UIColor blackColor]];
-    }
-
-    CGContextDrawImage(context, CGRectMake(0, 0, width, height), cgImage);
-    CGContextRelease(context);
-
-    // Track vibrant candidates
-    CGFloat bestScore1 = -1.0f;
-    UIColor *bestColor1 = nil;
-    CGFloat bestScore2 = -1.0f;
-    UIColor *bestColor2 = nil;
-
-    for (size_t y = 0; y < height; y++) {
-        for (size_t x = 0; x < width; x++) {
-            size_t byteIndex = (bytesPerRow * y) + (x * bytesPerPixel);
-            CGFloat r = rawData[byteIndex] / 255.0f;
-            CGFloat g = rawData[byteIndex + 1] / 255.0f;
-            CGFloat b = rawData[byteIndex + 2] / 255.0f;
-
-            UIColor *sample = [UIColor colorWithRed:r green:g blue:b alpha:1.0f];
-            CGFloat h, s, v, a;
-            [sample getHue:&h saturation:&s brightness:&v alpha:&a];
-
-            // Filter out near-pure-black or near-white or muddy neutral gray
-            if (v < 0.18f || v > 0.95f || s < 0.25f) continue;
-
-            // Score based on saturation and vibrancy
-            CGFloat score = (s * 0.65f) + (v * 0.35f);
-            if (score > bestScore1) {
-                bestScore2 = bestScore1;
-                bestColor2 = bestColor1;
-                bestScore1 = score;
-                bestColor1 = sample;
-            } else if (score > bestScore2) {
-                bestScore2 = score;
-                bestColor2 = sample;
-            }
-        }
-    }
-
-    free(rawData);
-
-    if (!bestColor1) {
-        bestColor1 = [UIColor colorWithRed:0.2f green:0.25f blue:0.35f alpha:1.0f];
-    }
-    if (!bestColor2) {
-        bestColor2 = [bestColor1 colorWithAlphaComponent:0.75f];
-    }
-
-    return @[bestColor1, bestColor2];
+    // Drop shadow: 0 8px 24px -12px rgba(0,0,0,.35)
+    view.layer.shadowColor = [UIColor blackColor].CGColor;
+    view.layer.shadowOpacity = 0.35f;
+    view.layer.shadowOffset = CGSizeMake(0, 8);
+    view.layer.shadowRadius = 12.0f;
 }
 
 @end

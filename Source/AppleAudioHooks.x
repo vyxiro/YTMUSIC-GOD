@@ -213,8 +213,8 @@ static AmbientView *gSharedAmbientView = nil;
 
 - (void)didMoveToWindow {
     %orig;
-    if (self.window && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
-        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+    if (self.window) {
+        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
         self.minimumTrackTintColor = accent;
         self.thumbTintColor = accent;
     }
@@ -226,17 +226,36 @@ static AmbientView *gSharedAmbientView = nil;
 
 - (void)layoutSubviews {
     %orig;
-    if (self.selected && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
-        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+    if (self.selected) {
+        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
         [self setTintColor:accent];
     }
 }
 
 - (void)setSelected:(BOOL)selected {
     %orig(selected);
-    if (selected && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
-        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+    if (selected) {
+        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
         [self setTintColor:accent];
+    }
+}
+
+%end
+
+%hook YTPivotBarView
+
+- (void)layoutSubviews {
+    %orig;
+    if (![ThemeManager sharedManager].isStaticMode) {
+        self.layer.cornerRadius = 27.0f;
+        self.layer.masksToBounds = NO;
+        self.backgroundColor = [[ThemeManager sharedManager] glassBackgroundColor];
+        self.layer.borderWidth = 1.0f;
+        self.layer.borderColor = [[ThemeManager sharedManager] glassBorderColor].CGColor;
+        self.layer.shadowColor = [UIColor blackColor].CGColor;
+        self.layer.shadowOpacity = 0.35f;
+        self.layer.shadowOffset = CGSizeMake(0, 8);
+        self.layer.shadowRadius = 12.0f;
     }
 }
 

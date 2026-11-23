@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "ThemeManager.h"
 
 static BOOL YTMU(NSString *key) {
     NSDictionary *YTMUltimateDict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
@@ -70,9 +71,19 @@ static BOOL isLowContrast() {
 %end
 
 %hook YTMPlayerPageColorScheme
-- (UIColor *)backgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
+- (UIColor *)backgroundColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [UIColor clearColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
 - (UIColor *)expandedTabsBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)miniPlayerColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
+- (UIColor *)miniPlayerColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[ThemeManager sharedManager] glassBackgroundColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
 - (UIColor *)expandedTabViewColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
 - (UIColor *)overlayButtonColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
 - (UIColor *)overlayErrorBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
