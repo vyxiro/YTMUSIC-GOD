@@ -18,6 +18,7 @@ static BOOL playbackRateButton(void) {
 @property (readonly, nonatomic) NSArray <YTMPlaybackRateButtonHolder *> *playbackRateButtons;
 @end
 
+%group ModularNowPlayingGroup
 %hook YTMModularNowPlayingViewController
 - (BOOL)playbackRateButtonEnabled {
     return playbackRateButton() ? YES : %orig;
@@ -26,6 +27,7 @@ static BOOL playbackRateButton(void) {
 - (void)setPlaybackRateButtonEnabled:(BOOL)enabled {
     playbackRateButton() ? %orig(YES) : %orig;
 }
+%end
 %end
 
 %hook YTMPlayerControlsView
@@ -52,3 +54,10 @@ static BOOL playbackRateButton(void) {
     [NSLayoutConstraint activateConstraints:buttonsConstraints];
 }
 %end
+
+%ctor {
+    %init;
+    if (objc_getClass("YTMModularNowPlayingViewController")) {
+        %init(ModularNowPlayingGroup);
+    }
+}

@@ -177,6 +177,7 @@ static BOOL isLowContrast() {
 // %end
 
 #pragma mark - OLED Dark Keyboard
+%group OLEDKeyboardGroup
 %hook UIPredictionViewController // support prediction bar - @ichitaso: http://gist.github.com/ichitaso/935100fd53a26f18a9060f7195a1be0e
 - (void)loadView {
     %orig;
@@ -208,6 +209,7 @@ static BOOL isLowContrast() {
     %orig;
 }
 %end
+%end
 
 #pragma mark - Low contrast mode
 %hook YTCommonColorPalette
@@ -224,3 +226,10 @@ static BOOL isLowContrast() {
     return isLowContrast() ? [UIColor colorWithWhite:0.565 alpha:1] : %orig;
 }
 %end
+
+%ctor {
+    %init;
+    if (objc_getClass("UIKeyboardLayoutStar")) {
+        %init(OLEDKeyboardGroup);
+    }
+}

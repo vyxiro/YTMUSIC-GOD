@@ -106,8 +106,10 @@ static NSString *accessGroupID() {
 + (id)sharedAccessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
 %end
 
+%group SSOBundleIdGroup
 %hook SSOBundleIdServiceImpl
 - (id)bundleId { return YT_BUNDLE_ID; }
+%end
 %end
 
 %hook NSFileManager
@@ -156,8 +158,10 @@ static NSString *accessGroupID() {
 - (id)shortAppName { return YT_NAME; }
 %end
 
+%group OGLPhenotypeFlagGroup
 %hook OGLPhenotypeFlagServiceImpl
 - (NSString *)bundleId { return YT_BUNDLE_ID; }
+%end
 %end
 
 %hook APMAEU
@@ -189,15 +193,8 @@ static NSString *accessGroupID() {
 
 %hook NSBundle
 - (NSString *)bundleIdentifier {
-    NSArray *address = [NSThread callStackReturnAddresses];
-    if (address.count > 2) {
-        Dl_info info = {0};
-        if (dladdr((void *)[address[2] longLongValue], &info) != 0 && info.dli_fname != NULL) {
-            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
-            if (path && [path hasPrefix:NSBundle.mainBundle.bundlePath]) {
-                return YT_BUNDLE_ID;
-            }
-        }
+    if (self == [NSBundle mainBundle]) {
+        return YT_BUNDLE_ID;
     }
     return %orig;
 }
@@ -234,8 +231,10 @@ static NSString *accessGroupID() {
 - (id)actualBundleID { return YT_BUNDLE_ID; }
 %end
 
+%group GAZAppInfoGroup
 %hook GAZAppInfo
 - (id)currentBundleIdentifier { return YT_BUNDLE_ID; }
+%end
 %end
 
 NSDictionary *(*orig_infoDictionary)(id self, SEL _cmd);
@@ -273,6 +272,7 @@ BOOL isFirstTime = YES;
 
 @end
 
+%group SFAuthGroup
 %hook SFAuthenticationViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
@@ -293,6 +293,7 @@ BOOL isFirstTime = YES;
     }
 }
 %end
+%end
 
 %hook YTMFirstTimeSignInViewController
 - (void)viewDidDisappear:(bool)arg1 {
@@ -303,3 +304,19 @@ BOOL isFirstTime = YES;
     [alertView show];
 }
 %end
+
+%ctor {
+    %init;
+    if (objc_getClass("SSOBundleIdServiceImpl")) {
+        %init(SSOBundleIdGroup);
+    }
+    if (objc_getClass("OGLPhenotypeFlagServiceImpl")) {
+        %init(OGLPhenotypeFlagGroup);
+    }
+    if (objc_getClass("GAZAppInfo")) {
+        %init(GAZAppInfoGroup);
+    }
+    if (objc_getClass("SFAuthenticationViewController")) {
+        %init(SFAuthGroup);
+    }
+}
