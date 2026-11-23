@@ -172,7 +172,7 @@
             [sw addTarget:self action:@selector(oledToggled:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
         } else if (indexPath.row == 2) {
-            NSMutableDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
+            NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
             cell.textLabel.text = LOC(@"OLED_DARK_KEYBOARD");
             cell.detailTextLabel.text = LOC(@"OLED_DARK_KEYBOARD_DESC");
 
