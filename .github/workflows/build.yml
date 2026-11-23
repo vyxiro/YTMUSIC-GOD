@@ -1,0 +1,127 @@
+name: Build YTMusicAppleStyleEnhancer
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'YTMusicAppleStyleEnhancer/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Optional URL to Decrypted YouTube Music .ipa for Direct Injection"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-tweak:
+    name: Compile Dylib and Deb
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Build Tools
+        run: |
+          brew install make ldid dpkg
+
+      - name: Set Environment Variables
+        run: |
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+
+      - name: Cache Theos & SDK
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: |
+            theos
+          key: theos-macos-16.5-sdk-v1
+
+      - name: Setup Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          ref: 344ee5925df036dbd1312b783ad5a00d153c2445
+          path: theos
+          submodules: recursive
+
+      - name: Download iPhoneOS 16.5 SDK
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks.git
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
+          git checkout
+          mv *.sdk "$THEOS/sdks"
+          cd .. && rm -rf sdks
+
+      - name: Compile YTMusicAppleStyleEnhancer
+        run: |
+          cd YTMusicAppleStyleEnhancer
+          make clean package FINALPACKAGE=1 DEBUG=0
+          
+          # Locate generated dylib
+          mkdir -p ../dist
+          find .theos/ -name "*.dylib" -exec cp {} ../dist/YTMusicAppleStyleEnhancer.dylib \;
+          cp packages/*.deb ../dist/
+          echo "Successfully extracted dylib and deb:"
+          ls -lah ../dist
+
+      - name: Upload Standalone Dylib Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTMusicAppleStyleEnhancer-Dylib
+          path: dist/YTMusicAppleStyleEnhancer.dylib
+          if-no-files-found: error
+
+      - name: Upload Deb Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTMusicAppleStyleEnhancer-Deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  optional-inject-ipa:
+    name: Inject into IPA (if URL provided)
+    needs: build-tweak
+    runs-on: macos-latest
+    if: inputs.ipa_url != ''
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download Dylib Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: YTMusicAppleStyleEnhancer-Dylib
+          path: ./dist
+
+      - name: Install Cyan Injection Tool
+        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+
+      - name: Download Target IPA
+        run: |
+          wget "${{ inputs.ipa_url }}" --no-verbose -O target.ipa
+
+      - name: Inject Dylib into IPA
+        run: |
+          cyan -i target.ipa -o YouTubeMusic_AppleStyle.ipa -u dist/YTMusicAppleStyleEnhancer.dylib -n "YouTube Music"
+
+      - name: Upload Modified IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YouTubeMusic_AppleStyle_IPA
+          path: YouTubeMusic_AppleStyle.ipa

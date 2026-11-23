@@ -1,0 +1,9 @@
+Package: com.user.ytmusicapplestyleenhancer
+Name: YTMusicAppleStyleEnhancer
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Apple Music-style smooth audio crossfade, low-network buffer optimization, dynamic album-art ambient glow, and OLED Yellow & Green theme engine for YouTube Music.
+Maintainer: Antigravity
+Author: Antigravity
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000)
