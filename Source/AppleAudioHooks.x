@@ -2,6 +2,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import "AudioCrossfadeManager.h"
 #import "NetworkBufferOptimizer.h"
+#import "ThemeManager.h"
+#import "AmbientView.h"
 #import "Headers/YTPlayerViewController.h"
 #import "Headers/YTPlayerResponse.h"
 #import "Headers/YTIPlayerResponse.h"
@@ -22,7 +24,13 @@
 @interface YTPlaybackController : NSObject
 @end
 
+@interface YTPivotBarItemView : UIView
+@property (nonatomic, assign) BOOL selected;
+- (void)setTintColor:(UIColor *)color;
+@end
+
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
+static AmbientView *gSharedAmbientView = nil;
 
 #pragma mark - Playback Controller & Crossfade Hooks
 
@@ -72,6 +80,23 @@ static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 
 %hook YTMNowPlayingViewController
 
+- (void)viewDidLoad {
+    %orig;
+    if (!gSharedAmbientView) {
+        gSharedAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
+        gSharedAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self.view insertSubview:gSharedAmbientView atIndex:0];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (gSharedAmbientView) {
+        gSharedAmbientView.frame = self.view.bounds;
+        [self.view sendSubviewToBack:gSharedAmbientView];
+    }
+}
+
 - (void)didTapNextButton {
     [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
     %orig;
@@ -80,6 +105,22 @@ static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 - (void)didTapPrevButton {
     [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
     %orig;
+}
+
+%end
+
+// Feed album artwork to AmbientView
+%hook UIImageView
+
+- (void)setImage:(UIImage *)image {
+    %orig(image);
+
+    if (image && gSharedAmbientView && gSharedAmbientView.glowEnabled) {
+        CGSize sz = image.size;
+        if (sz.width >= 120 && sz.height >= 120 && fabs(sz.width - sz.height) < 40) {
+            [gSharedAmbientView updateWithArtworkImage:image animated:YES];
+        }
+    }
 }
 
 %end
@@ -162,6 +203,41 @@ static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
         return 30.0; // 30 seconds minimum buffer before playback begins
     }
     return %orig;
+}
+
+%end
+
+#pragma mark - Dynamic Theme Accent Hooks
+
+%hook UISlider
+
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
+        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+        self.minimumTrackTintColor = accent;
+        self.thumbTintColor = accent;
+    }
+}
+
+%end
+
+%hook YTPivotBarItemView
+
+- (void)layoutSubviews {
+    %orig;
+    if (self.selected && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
+        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+        [self setTintColor:accent];
+    }
+}
+
+- (void)setSelected:(BOOL)selected {
+    %orig(selected);
+    if (selected && [ThemeManager sharedManager].themePreset != YTMThemePresetDefaultRed) {
+        UIColor *accent = [[ThemeManager sharedManager] currentAccentColor];
+        [self setTintColor:accent];
+    }
 }
 
 %end

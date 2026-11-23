@@ -1,11 +1,8 @@
-name: Build YTMusicAppleStyleEnhancer
+name: Build Unified YTMusicUltimate
 
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'YTMusicAppleStyleEnhancer/**'
-      - '.github/workflows/build.yml'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -21,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-tweak:
-    name: Compile Dylib and Deb
+  build-unified-tweak:
+    name: Compile Unified YTMusicUltimate Dylib and Deb
     runs-on: macos-latest
 
     steps:
@@ -67,35 +64,33 @@ jobs:
           mv *.sdk "$THEOS/sdks"
           cd .. && rm -rf sdks
 
-      - name: Compile YTMusicAppleStyleEnhancer
+      - name: Compile Unified YTMusicUltimate
         run: |
-          cd YTMusicAppleStyleEnhancer
-          make clean package FINALPACKAGE=1 DEBUG=0
+          make clean package FINALPACKAGE=1 DEBUG=0 SIDELOADING=1
           
-          # Locate generated dylib
-          mkdir -p ../dist
-          find .theos/ -name "*.dylib" -exec cp {} ../dist/YTMusicAppleStyleEnhancer.dylib \;
-          cp packages/*.deb ../dist/
-          echo "Successfully extracted dylib and deb:"
-          ls -lah ../dist
+          mkdir -p dist
+          find .theos/ -name "*.dylib" -exec cp {} dist/YTMusicUltimate.dylib \;
+          cp packages/*.deb dist/
+          echo "Successfully compiled unified YTMusicUltimate:"
+          ls -lah dist
 
-      - name: Upload Standalone Dylib Artifact
+      - name: Upload Unified Dylib Artifact (For Sideloadly)
         uses: actions/upload-artifact@v4
         with:
-          name: YTMusicAppleStyleEnhancer-Dylib
-          path: dist/YTMusicAppleStyleEnhancer.dylib
+          name: YTMusicUltimate-Unified-Dylib
+          path: dist/YTMusicUltimate.dylib
           if-no-files-found: error
 
-      - name: Upload Deb Package Artifact
+      - name: Upload Unified Deb Package Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YTMusicAppleStyleEnhancer-Deb
+          name: YTMusicUltimate-Unified-Deb
           path: dist/*.deb
           if-no-files-found: error
 
   optional-inject-ipa:
     name: Inject into IPA (if URL provided)
-    needs: build-tweak
+    needs: build-unified-tweak
     runs-on: macos-latest
     if: inputs.ipa_url != ''
 
@@ -106,7 +101,7 @@ jobs:
       - name: Download Dylib Artifact
         uses: actions/download-artifact@v4
         with:
-          name: YTMusicAppleStyleEnhancer-Dylib
+          name: YTMusicUltimate-Unified-Dylib
           path: ./dist
 
       - name: Install Cyan Injection Tool
@@ -116,12 +111,12 @@ jobs:
         run: |
           wget "${{ inputs.ipa_url }}" --no-verbose -O target.ipa
 
-      - name: Inject Dylib into IPA
+      - name: Inject Unified Dylib into Clean IPA
         run: |
-          cyan -i target.ipa -o YouTubeMusic_AppleStyle.ipa -u dist/YTMusicAppleStyleEnhancer.dylib -n "YouTube Music"
+          cyan -i target.ipa -o YouTubeMusic_Complete.ipa -u dist/YTMusicUltimate.dylib -n "YouTube Music"
 
-      - name: Upload Modified IPA Artifact
+      - name: Upload Complete Pre-Patched IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YouTubeMusic_AppleStyle_IPA
-          path: YouTubeMusic_AppleStyle.ipa
+          name: YouTubeMusic_Complete_IPA
+          path: YouTubeMusic_Complete.ipa
