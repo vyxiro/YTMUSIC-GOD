@@ -45,21 +45,26 @@
     self.backgroundGradientLayer.frame = self.bounds;
     self.backgroundGradientLayer.startPoint = CGPointMake(0.35, 0.0);
     self.backgroundGradientLayer.endPoint = CGPointMake(0.65, 1.0);
-    self.backgroundGradientLayer.colors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor2].CGColor];
+    UIColor *initB1 = [tm baseColor1] ?: [UIColor blackColor];
+    UIColor *initB2 = [tm baseColor2] ?: [UIColor darkGrayColor];
+    UIColor *initA1 = [tm accentColor1] ?: [UIColor cyanColor];
+    UIColor *initA2 = [tm accentColor2] ?: [UIColor blueColor];
+
+    self.backgroundGradientLayer.colors = @[(id)initB1.CGColor, (id)initB2.CGColor];
     [self.layer addSublayer:self.backgroundGradientLayer];
 
     // 2. Blob A: width 210, height 210, top: -40, right: -60, background: var(--a1), opacity: 0.75
     self.blobALayer = [CALayer layer];
     self.blobALayer.cornerRadius = 105;
     self.blobALayer.opacity = 0.75f;
-    self.blobALayer.backgroundColor = [tm accentColor1].CGColor;
+    self.blobALayer.backgroundColor = initA1.CGColor;
     [self.layer addSublayer:self.blobALayer];
 
     // 3. Blob B: width 190, height 190, top: 260, left: -70, background: var(--a2), opacity: 0.55
     self.blobBLayer = [CALayer layer];
     self.blobBLayer.cornerRadius = 95;
     self.blobBLayer.opacity = 0.55f;
-    self.blobBLayer.backgroundColor = [tm accentColor2].CGColor;
+    self.blobBLayer.backgroundColor = initA2.CGColor;
     [self.layer addSublayer:self.blobBLayer];
 
     // 4. Liquid Glass Blur Overlay (filter: blur(38px))
@@ -95,11 +100,16 @@
 - (void)applyThemeColorsAnimated:(BOOL)animated {
     ThemeManager *tm = [ThemeManager sharedManager];
 
+    UIColor *b1 = [tm baseColor1] ?: [UIColor blackColor];
+    UIColor *b2 = [tm baseColor2] ?: [UIColor darkGrayColor];
+    UIColor *a1 = [tm accentColor1] ?: [UIColor cyanColor];
+    UIColor *a2 = [tm accentColor2] ?: [UIColor blueColor];
+
     if (tm.isStaticMode) {
         self.blobALayer.hidden = YES;
         self.blobBLayer.hidden = YES;
         self.diffuseBlurView.hidden = YES;
-        self.backgroundGradientLayer.colors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor1].CGColor];
+        self.backgroundGradientLayer.colors = @[(id)b1.CGColor, (id)b1.CGColor];
         return;
     }
 
@@ -107,9 +117,9 @@
     self.blobBLayer.hidden = NO;
     self.diffuseBlurView.hidden = NO;
 
-    NSArray *newBgColors = @[(id)[tm baseColor1].CGColor, (id)[tm baseColor2].CGColor];
-    CGColorRef newA1 = [tm accentColor1].CGColor;
-    CGColorRef newA2 = [tm accentColor2].CGColor;
+    NSArray *newBgColors = @[(id)b1.CGColor, (id)b2.CGColor];
+    CGColorRef newA1 = a1.CGColor;
+    CGColorRef newA2 = a2.CGColor;
 
     if (animated) {
         CFTimeInterval duration = 1.8; // Exact transition from user CSS spec (1.8s ease)
@@ -152,21 +162,19 @@
     ThemeManager *tm = [ThemeManager sharedManager];
     if (tm.liquidTheme != YTMLiquidThemeAmbient) return;
 
+    CGImageRef cgImage = image.CGImage;
+    if (!cgImage) return;
+    CGImageRetain(cgImage);
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        CGSize thumbSize = CGSizeMake(20, 20);
-        UIGraphicsBeginImageContextWithOptions(thumbSize, NO, 1.0f);
-        [image drawInRect:CGRectMake(0, 0, thumbSize.width, thumbSize.height)];
-        UIImage *thumbnail = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-
-        CGImageRef cgImage = thumbnail.CGImage;
-        if (!cgImage) return;
-
-        size_t width = CGImageGetWidth(cgImage);
-        size_t height = CGImageGetHeight(cgImage);
+        size_t width = 20;
+        size_t height = 20;
         size_t bytesPerRow = width * 4;
         uint8_t *rawData = (uint8_t *)calloc(height * bytesPerRow, sizeof(uint8_t));
-        if (!rawData) return;
+        if (!rawData) {
+            CGImageRelease(cgImage);
+            return;
+        }
 
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
         CGContextRef context = CGBitmapContextCreate(rawData, width, height, 8, bytesPerRow, colorSpace,
@@ -174,11 +182,13 @@
         CGColorSpaceRelease(colorSpace);
         if (!context) {
             free(rawData);
+            CGImageRelease(cgImage);
             return;
         }
 
         CGContextDrawImage(context, CGRectMake(0, 0, width, height), cgImage);
         CGContextRelease(context);
+        CGImageRelease(cgImage);
 
         UIColor *cand1 = nil;
         UIColor *cand2 = nil;
@@ -212,8 +222,8 @@
         }
         free(rawData);
 
-        if (!cand1) cand1 = [ThemeManager colorFromHexString:@"#19D3B0"];
-        if (!cand2) cand2 = [cand1 colorWithAlphaComponent:0.75];
+        if (!cand1) cand1 = [ThemeManager colorFromHexString:@"#19D3B0"] ?: [UIColor cyanColor];
+        if (!cand2) cand2 = [cand1 colorWithAlphaComponent:0.75] ?: [UIColor blueColor];
 
         // Derive subtle dark gradient bases
         CGFloat r1, g1, b1, a1;

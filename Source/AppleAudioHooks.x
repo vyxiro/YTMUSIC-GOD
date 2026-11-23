@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <objc/message.h>
 #import "AudioCrossfadeManager.h"
 #import "NetworkBufferOptimizer.h"
 #import "ThemeManager.h"
@@ -25,11 +26,11 @@
 @end
 
 @interface YTPivotBarItemView : UIView
-@property (nonatomic, assign) BOOL selected;
-- (void)setTintColor:(UIColor *)color;
+- (id)navigationButton;
 @end
 
 @interface YTPivotBarView : UIView
+- (UIView *)contentView;
 @end
 
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
@@ -118,9 +119,9 @@ static AmbientView *gSharedAmbientView = nil;
 - (void)setImage:(UIImage *)image {
     %orig(image);
 
-    if (image && gSharedAmbientView && gSharedAmbientView.glowEnabled) {
+    if (image && gSharedAmbientView && gSharedAmbientView.window && gSharedAmbientView.glowEnabled) {
         CGSize sz = image.size;
-        if (sz.width >= 120 && sz.height >= 120 && fabs(sz.width - sz.height) < 40) {
+        if (sz.width >= 150 && sz.height >= 150 && fabs(sz.width - sz.height) < 30) {
             [gSharedAmbientView updateWithArtworkImage:image animated:YES];
         }
     }
@@ -185,6 +186,8 @@ static AmbientView *gSharedAmbientView = nil;
 
 %end
 
+%group HAMChunkBufferGroup
+
 %hook HAMChunkBuffer
 
 - (double)targetBufferDuration {
@@ -210,16 +213,20 @@ static AmbientView *gSharedAmbientView = nil;
 
 %end
 
+%end
+
 #pragma mark - Dynamic Theme Accent Hooks
 
 %hook UISlider
 
 - (void)didMoveToWindow {
     %orig;
-    if (self.window) {
+    if (self.window && ![ThemeManager sharedManager].isStaticMode) {
         UIColor *accent = [[ThemeManager sharedManager] accentColor1];
-        self.minimumTrackTintColor = accent;
-        self.thumbTintColor = accent;
+        if (accent) {
+            self.minimumTrackTintColor = accent;
+            self.thumbTintColor = accent;
+        }
     }
 }
 
@@ -229,17 +236,15 @@ static AmbientView *gSharedAmbientView = nil;
 
 - (void)layoutSubviews {
     %orig;
-    if (self.selected) {
-        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
-        [self setTintColor:accent];
-    }
-}
-
-- (void)setSelected:(BOOL)selected {
-    %orig(selected);
-    if (selected) {
-        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
-        [self setTintColor:accent];
+    if (![ThemeManager sharedManager].isStaticMode && [self respondsToSelector:@selector(navigationButton)]) {
+        UIView *btn = (UIView *)[self performSelector:@selector(navigationButton)];
+        if (btn && [btn respondsToSelector:@selector(isSelected)]) {
+            BOOL isSel = ((BOOL (*)(id, SEL))objc_msgSend)(btn, @selector(isSelected));
+            if (isSel) {
+                UIColor *accent = [[ThemeManager sharedManager] accentColor1];
+                if (accent) [btn setTintColor:accent];
+            }
+        }
     }
 }
 
@@ -259,6 +264,10 @@ static AmbientView *gSharedAmbientView = nil;
         self.layer.shadowOpacity = 0.35f;
         self.layer.shadowOffset = CGSizeMake(0, 8);
         self.layer.shadowRadius = 12.0f;
+        if ([self respondsToSelector:@selector(contentView)]) {
+            UIView *cv = (UIView *)[self performSelector:@selector(contentView)];
+            if (cv) cv.backgroundColor = [UIColor clearColor];
+        }
     }
 }
 
@@ -297,4 +306,9 @@ static void handleQueuePrefetchNotification(CFNotificationCenterRef center, void
     [[NSNotificationCenter defaultCenter] addObserverForName:@"YTMAppleTriggerQueuePrefetch" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
         handleQueuePrefetchNotification(NULL, NULL, NULL, NULL, NULL);
     }];
+
+    %init;
+    if (objc_getClass("HAMChunkBuffer")) {
+        %init(HAMChunkBufferGroup);
+    }
 }

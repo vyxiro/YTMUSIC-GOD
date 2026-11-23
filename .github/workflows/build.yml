@@ -71,7 +71,17 @@ jobs:
           mkdir -p dist
           find .theos/ -name "*.dylib" -exec cp {} dist/YTMusicUltimate.dylib \;
           cp packages/*.deb dist/
-          echo "Successfully compiled unified YTMusicUltimate:"
+
+          # Universal Sideloading RPATH Fix:
+          # Change jailbreak root path /Library/Frameworks/... to universal @rpath/...
+          install_name_tool -change /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate @rpath/CydiaSubstrate.framework/CydiaSubstrate dist/YTMusicUltimate.dylib || true
+          install_name_tool -add_rpath @executable_path/Frameworks dist/YTMusicUltimate.dylib || true
+          install_name_tool -add_rpath @loader_path/Frameworks dist/YTMusicUltimate.dylib || true
+          install_name_tool -add_rpath @loader_path dist/YTMusicUltimate.dylib || true
+          ldid -S dist/YTMusicUltimate.dylib || true
+
+          echo "Successfully patched and verified unified YTMusicUltimate:"
+          otool -L dist/YTMusicUltimate.dylib
           ls -lah dist
 
       - name: Upload Unified Dylib Artifact (For Sideloadly)
