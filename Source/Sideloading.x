@@ -68,41 +68,41 @@ static NSString *accessGroupID() {
 %end
 
 %hook SSOKeychainHelper
-+ (id)accessGroup { return accessGroupID(); }
-+ (id)sharedAccessGroup { return accessGroupID(); }
++ (id)accessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
++ (id)sharedAccessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
 %end
 
 %hook SSOFolsomKeychainUtils
-- (id)sharedAccessGroup { return accessGroupID(); }
+- (id)sharedAccessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
 %end
 
 %hook GULKeychainStorage
 - (void)getObjectForKey:(id)key objectClass:(Class)objectClass accessGroup:(id)accessGroup completionHandler:(id)handler {
-    accessGroup = accessGroupID();
-    %orig;
+    NSString *grp = accessGroupID() ?: accessGroup;
+    %orig(key, objectClass, grp, handler);
 }
 - (void)setObject:(id)object forKey:(id)key accessGroup:(id)accessGroup completionHandler:(id)handler {
-    accessGroup = accessGroupID();
-    %orig;
+    NSString *grp = accessGroupID() ?: accessGroup;
+    %orig(object, key, grp, handler);
 }
 - (void)removeObjectForKey:(id)key accessGroup:(id)accessGroup completionHandler:(id)handler {
-    accessGroup = accessGroupID();
-    %orig;
+    NSString *grp = accessGroupID() ?: accessGroup;
+    %orig(key, grp, handler);
 }
 - (void)getObjectFromKeychainForKey:(id)key objectClass:(Class)objectClass accessGroup:(id)accessGroup completionHandler:(id)handler {
-    accessGroup = accessGroupID();
-    %orig;
+    NSString *grp = accessGroupID() ?: accessGroup;
+    %orig(key, objectClass, grp, handler);
 }
 - (id)keychainQueryWithKey:(id)key accessGroup:(id)accessGroup {
-    accessGroup = accessGroupID();
-    return %orig(key, accessGroup);
+    NSString *grp = accessGroupID() ?: accessGroup;
+    return %orig(key, grp);
 }
 %end
 
 // Thanks to jawshoeadan for this hook.
 %hook SSOKeychainCore
-+ (id)accessGroup { return accessGroupID(); }
-+ (id)sharedAccessGroup { return accessGroupID(); }
++ (id)accessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
++ (id)sharedAccessGroup { return accessGroupID() ?: [[NSBundle mainBundle] bundleIdentifier]; }
 %end
 
 %hook SSOBundleIdServiceImpl
@@ -189,12 +189,15 @@ static NSString *accessGroupID() {
 %hook NSBundle
 - (NSString *)bundleIdentifier {
     NSArray *address = [NSThread callStackReturnAddresses];
-    Dl_info info = {0};
-    if (dladdr((void *)[address[2] longLongValue], &info) == 0)
-        return %orig;
-    NSString *path = [NSString stringWithUTF8String:info.dli_fname];
-    if ([path hasPrefix:NSBundle.mainBundle.bundlePath])
-        return YT_BUNDLE_ID;
+    if (address.count > 2) {
+        Dl_info info = {0};
+        if (dladdr((void *)[address[2] longLongValue], &info) != 0 && info.dli_fname != NULL) {
+            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+            if (path && [path hasPrefix:NSBundle.mainBundle.bundlePath]) {
+                return YT_BUNDLE_ID;
+            }
+        }
+    }
     return %orig;
 }
 - (id)objectForInfoDictionaryKey:(NSString *)key {

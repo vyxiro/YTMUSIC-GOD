@@ -9,6 +9,9 @@ INSTALL_TARGET_PROCESSES = YouTubeMusic
 TARGET = iphone:clang:16.5:13.0
 PACKAGE_VERSION = 2.4.1
 
+LOGOS_DEFAULT_GENERATOR = internal
+YTMusicUltimate_LOGOS_DEFAULT_GENERATOR = internal
+
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = YTMusicUltimate
@@ -17,6 +20,7 @@ $(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -DTWEAK_VERSION=$
 $(TWEAK_NAME)_FRAMEWORKS = UIKit Foundation AVFoundation AudioToolbox VideoToolbox QuartzCore CoreGraphics
 $(TWEAK_NAME)_OBJ_FILES = $(shell find Source/Utils/lib -name '*.a')
 $(TWEAK_NAME)_LIBRARIES = bz2 c++ iconv z
+$(TWEAK_NAME)_USE_SUBSTRATE = 0
 ifeq ($(SIDELOADING),1)
 $(TWEAK_NAME)_FILES += Source/Sideloading.x
 endif

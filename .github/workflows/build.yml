@@ -66,14 +66,13 @@ jobs:
 
       - name: Compile Unified YTMusicUltimate
         run: |
-          make clean package FINALPACKAGE=1 DEBUG=0 SIDELOADING=1
+          make clean package FINALPACKAGE=1 DEBUG=0 SIDELOADING=1 SUBSTRATE=0
           
           mkdir -p dist
           find .theos/ -name "*.dylib" -exec cp {} dist/YTMusicUltimate.dylib \;
           cp packages/*.deb dist/
 
           # Universal Sideloading RPATH Fix:
-          # Change jailbreak root path /Library/Frameworks/... to universal @rpath/...
           install_name_tool -change /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate @rpath/CydiaSubstrate.framework/CydiaSubstrate dist/YTMusicUltimate.dylib || true
           install_name_tool -add_rpath @executable_path/Frameworks dist/YTMusicUltimate.dylib || true
           install_name_tool -add_rpath @loader_path/Frameworks dist/YTMusicUltimate.dylib || true
