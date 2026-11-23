@@ -29,6 +29,9 @@
 - (void)setTintColor:(UIColor *)color;
 @end
 
+@interface YTPivotBarView : UIView
+@end
+
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 static AmbientView *gSharedAmbientView = nil;
 
