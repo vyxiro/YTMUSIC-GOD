@@ -84,14 +84,11 @@ static NSString * const kCacheSubdir = @"YTMAppleAudioCache";
 - (void)optimizePlayerItem:(AVPlayerItem *)item {
     if (!item || !self.deepBufferEnabled) return;
 
-    // Apple Music style deep forward buffering: 120 seconds ahead of current playhead
-    if (@available(iOS 10.0, *)) {
-        item.preferredForwardBufferDuration = 120.0;
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = YES;
-    }
-    if (@available(iOS 13.0, *)) {
-        item.automaticallyPreservesTimeOffsetFromLive = NO;
-    }
+    @try {
+        if (@available(iOS 10.0, *)) {
+            item.preferredForwardBufferDuration = 60.0;
+        }
+    } @catch (NSException *e) {}
 }
 
 - (void)tuneSessionConfiguration:(NSURLSessionConfiguration *)config {

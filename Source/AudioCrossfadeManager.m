@@ -45,13 +45,13 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 - (void)loadSettings {
     NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kYTMUltimateKey];
     if (dict) {
-        self.crossfadeEnabled = dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : YES;
+        self.crossfadeEnabled = dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : NO;
         self.crossfadeDuration = dict[kCrossfadeDurationKey] ? [dict[kCrossfadeDurationKey] floatValue] : 5.0f;
-        self.gaplessBypassEnabled = dict[kGaplessBypassKey] ? [dict[kGaplessBypassKey] boolValue] : YES;
+        self.gaplessBypassEnabled = dict[kGaplessBypassKey] ? [dict[kGaplessBypassKey] boolValue] : NO;
     } else {
-        self.crossfadeEnabled = YES;
+        self.crossfadeEnabled = NO;
         self.crossfadeDuration = 5.0f;
-        self.gaplessBypassEnabled = YES;
+        self.gaplessBypassEnabled = NO;
         [self saveSettings];
     }
 }

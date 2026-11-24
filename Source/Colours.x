@@ -7,7 +7,7 @@ static BOOL YTMU(NSString *key) {
 }
 
 static BOOL isOLEDTheme(void) {
-    return YTMU(@"YTMUltimateIsEnabled") && YTMU(@"oledTheme");
+    return YTMU(@"YTMUltimateIsEnabled") && [ThemeManager sharedManager].oledBlackEnabled;
 }
 
 static BOOL isOLEDKeyboard() {
@@ -50,22 +50,27 @@ static BOOL isLowContrast() {
 
 %hook YTColor
 + (UIColor *)black0 {
+    if (![ThemeManager sharedManager].isStaticMode) return %orig;
     return isOLEDTheme() ? [self blackPure] : %orig;
 }
 
 + (UIColor *)black1 {
+    if (![ThemeManager sharedManager].isStaticMode) return %orig;
     return isOLEDTheme() ? [self blackPure] : %orig;
 }
 
 + (UIColor *)black2 {
+    if (![ThemeManager sharedManager].isStaticMode) return %orig;
     return isOLEDTheme() ? [self blackPure] : %orig;
 }
 
 + (UIColor *)black3 {
+    if (![ThemeManager sharedManager].isStaticMode) return %orig;
     return isOLEDTheme() ? [self blackPure] : %orig;
 }
 
 + (UIColor *)black4 {
+    if (![ThemeManager sharedManager].isStaticMode) return %orig;
     return isOLEDTheme() ? [self blackPure] : %orig;
 }
 %end
@@ -77,28 +82,81 @@ static BOOL isLowContrast() {
     }
     return isOLEDTheme() ? [UIColor blackColor] : %orig;
 }
-- (UIColor *)expandedTabsBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
+
+- (UIColor *)expandedTabsBackgroundColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [UIColor clearColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
 - (UIColor *)miniPlayerColor {
     if (![ThemeManager sharedManager].isStaticMode) {
         return [[ThemeManager sharedManager] glassBackgroundColor];
     }
     return isOLEDTheme() ? [UIColor blackColor] : %orig;
 }
-- (UIColor *)expandedTabViewColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)overlayButtonColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)overlayErrorBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)AVSwitchBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)AVSwitchActiveModeColor { return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig; }
-- (UIColor *)queueBackgroundColor { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-- (UIColor *)queueCurrentlyPlayingColor { return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig; }
 
-- (BOOL)gradientBackgroundEnabled { return isOLEDTheme() ? NO : %orig; }
+- (UIColor *)expandedTabViewColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [UIColor clearColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
+- (UIColor *)overlayButtonColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[ThemeManager sharedManager] glassBackgroundColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
+- (UIColor *)overlayErrorBackgroundColor {
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
+- (UIColor *)AVSwitchBackgroundColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[ThemeManager sharedManager] glassBackgroundColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
+- (UIColor *)AVSwitchActiveModeColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[ThemeManager sharedManager] accentColor1];
+    }
+    return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig;
+}
+
+- (UIColor *)queueBackgroundColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [UIColor clearColor];
+    }
+    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+}
+
+- (UIColor *)queueCurrentlyPlayingColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[[ThemeManager sharedManager] accentColor1] colorWithAlphaComponent:0.25f];
+    }
+    return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig;
+}
+
+- (BOOL)gradientBackgroundEnabled {
+    if (![ThemeManager sharedManager].isStaticMode) return NO;
+    return isOLEDTheme() ? NO : %orig;
+}
 %end
 
 %hook YTPivotBarView
 - (UIView *)contentView {
     UIView *orig = %orig;
-    if (isOLEDTheme()) orig.backgroundColor = [UIColor blackColor];
+    if (![ThemeManager sharedManager].isStaticMode) {
+        orig.backgroundColor = [UIColor clearColor];
+    } else if (isOLEDTheme()) {
+        orig.backgroundColor = [UIColor blackColor];
+    }
     return orig;
 }
 %end
@@ -108,91 +166,35 @@ static BOOL isLowContrast() {
 
 %hook YTLightweightBrowseBackgroundView
 - (UIImageView *)imageView {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        self.backgroundColor = [UIColor clearColor];
+        return nil;
+    }
     if (!isOLEDTheme()) {
         return %orig;
     }
-    
     self.backgroundColor = [UIColor blackColor];
     return nil;
 }
 %end
 
-// %hook YTCommonColorPalette
-// - (UIColor *)brandBackgroundSolid { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-// - (UIColor *)brandBackgroundPrimary { return isOLEDTheme() ? [UIColor blackColor] : %orig; }
-// %end
-
-// %hook YTPivotBarView
-// - (void)didMoveToWindow {
-//     if (isOLEDTheme()) self.subviews[0].backgroundColor = [UIColor blackColor];
-//     %orig;
-// }
-// %end
-
-// %hook YTMMusicMenuTitleView
-// - (void)didMoveToWindow {
-//     if (isOLEDTheme()) self.backgroundColor = [UIColor blackColor];
-//     %orig;
-// }
-// %end
-
-// %hook MDCSnackbarMessageView
-// - (void)didMoveToWindow {
-//     if (isOLEDTheme()) self.backgroundColor = [UIColor blackColor];
-//     %orig;
-// }
-// %end
-
-// %hook YTMPlayerPageColorScheme
-// - (void)setMiniPlayerColor:(UIColor *)color {
-//     isOLEDTheme() ? %orig([UIColor blackColor]) : %orig;
-// }
-
-// - (void)setQueueBackgroundColor:(UIColor *)color {
-//     isOLEDTheme() ? %orig([UIColor blackColor]) : %orig;
-// }
-
-// - (void)setQueueCurrentlyPlayingBackgroundColor:(UIColor *)color {
-//     isOLEDTheme() ? %orig([UIColor blackColor]) : %orig;
-// }
-
-// - (void)setTabViewColor:(UIColor *)color {
-//     isOLEDTheme() ? %orig([UIColor blackColor]) : %orig;
-// }
-
-// - (void)setAVSwitchBackgroundColor:(UIColor *)color {
-//     %orig(color);
-//     if (isOLEDTheme()) [self setPlayButtonColor:color];
-// }
-
-// - (void)setBackgroundColor:(UIColor *)color {
-//     isOLEDTheme() ? %orig([UIColor blackColor]) : %orig;
-// }
-// %end
-
-// %hook YTLightweightBrowseBackgroundView
-// - (id)imageView {
-//     return isOLEDTheme() ? nil : %orig;
-// }
-// %end
-
 #pragma mark - OLED Dark Keyboard
 %group OLEDKeyboardGroup
-%hook UIPredictionViewController // support prediction bar - @ichitaso: http://gist.github.com/ichitaso/935100fd53a26f18a9060f7195a1be0e
+%hook UIPredictionViewController
 - (void)loadView {
     %orig;
     if (isOLEDKeyboard()) [self.view setBackgroundColor:[UIColor blackColor]];
 }
 %end
 
-%hook UICandidateViewController // support prediction bar - @ichitaso:http://gist.github.com/ichitaso/935100fd53a26f18a9060f7195a1be0e
+%hook UICandidateViewController
 - (void)loadView {
     %orig;
     if (isOLEDKeyboard()) [self.view setBackgroundColor:[UIColor blackColor]];
 }
 %end
 
-%hook UIKBRenderConfig // Prediction text color
+%hook UIKBRenderConfig
 - (void)setLightKeyboard:(BOOL)arg1 { isOLEDKeyboard() ? %orig(NO) : %orig; }
 %end
 

@@ -8,19 +8,11 @@
 #import "Headers/YTPlayerViewController.h"
 #import "Headers/YTPlayerResponse.h"
 #import "Headers/YTIPlayerResponse.h"
-#import "Headers/YTIStreamingData.h"
-#import "Headers/YTIFormatStream.h"
+#import "Headers/YTIVideoDetails.h"
+#import "Headers/YTIThumbnailDetails.h"
+#import "Headers/YTIThumbnailDetails_Thumbnail.h"
 #import "Headers/YTMNowPlayingViewController.h"
-
-// Forward declarations
-@interface HAMChunkBuffer : NSObject
-- (double)targetBufferDuration;
-- (double)maxBufferDuration;
-- (double)minBufferDuration;
-@end
-
-@interface HAMDataLoader : NSObject
-@end
+#import "Headers/YTMBrowseViewController.h"
 
 @interface YTPlaybackController : NSObject
 @end
@@ -35,6 +27,7 @@
 
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 static AmbientView *gSharedAmbientView = nil;
+static AmbientView *gBrowseAmbientView = nil;
 
 #pragma mark - Playback Controller & Crossfade Hooks
 
@@ -43,49 +36,91 @@ static AmbientView *gSharedAmbientView = nil;
 - (void)viewDidLoad {
     %orig;
     gCurrentPlayerVC = self;
-    [[AudioCrossfadeManager sharedInstance] registerPlayerViewController:self];
+    @try {
+        [[AudioCrossfadeManager sharedInstance] registerPlayerViewController:self];
+    } @catch (NSException *e) {}
 }
 
 - (void)playbackController:(id)arg1 didActivateVideo:(id)arg2 withPlaybackData:(id)arg3 {
     %orig;
     gCurrentPlayerVC = self;
-    NSString *videoID = [self currentVideoID];
-    [[AudioCrossfadeManager sharedInstance] registerPlayerViewController:self];
-    [[AudioCrossfadeManager sharedInstance] notifyTrackActivatedWithVideoID:videoID player:nil];
-    [[NetworkBufferOptimizer sharedInstance] notifyNewTrackLoadedWithVideoID:videoID];
+    @try {
+        NSString *videoID = [self currentVideoID];
+        [[AudioCrossfadeManager sharedInstance] registerPlayerViewController:self];
+        [[AudioCrossfadeManager sharedInstance] notifyTrackActivatedWithVideoID:videoID player:nil];
+        [[NetworkBufferOptimizer sharedInstance] notifyNewTrackLoadedWithVideoID:videoID];
+
+        // Safe artwork extraction for Ambient Mode
+        YTPlayerResponse *response = self.playerResponse;
+        if (response && response.playerData && response.playerData.videoDetails) {
+            NSMutableArray *thumbnails = response.playerData.videoDetails.thumbnail.thumbnailsArray;
+            if (thumbnails.count > 0) {
+                YTIThumbnailDetails_Thumbnail *thumb = [thumbnails lastObject];
+                NSString *urlStr = thumb.URL;
+                if (urlStr.length > 0) {
+                    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:urlStr]];
+                        if (data) {
+                            UIImage *img = [UIImage imageWithData:data];
+                            if (img) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    if (gSharedAmbientView) {
+                                        [gSharedAmbientView updateWithArtworkImage:img animated:YES];
+                                    }
+                                    if (gBrowseAmbientView) {
+                                        [gBrowseAmbientView updateWithArtworkImage:img animated:YES];
+                                    }
+                                    [[NSNotificationCenter defaultCenter] postNotificationName:@"YTMArtworkDidUpdateNotification" object:img];
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    } @catch (NSException *e) {}
 }
 
 - (void)singleVideo:(id)video currentVideoTimeDidChange:(id)time {
     %orig;
-    CGFloat current = [self currentVideoMediaTime];
-    CGFloat total = [self currentVideoTotalMediaTime];
-    if (total > 0) {
-        [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
-        [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
-    }
+    @try {
+        CGFloat current = [self currentVideoMediaTime];
+        CGFloat total = [self currentVideoTotalMediaTime];
+        if (total > 0) {
+            [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
+            [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
+        }
+    } @catch (NSException *e) {}
 }
 
 - (void)potentiallyMutatedSingleVideo:(id)video currentVideoTimeDidChange:(id)time {
     %orig;
-    CGFloat current = [self currentVideoMediaTime];
-    CGFloat total = [self currentVideoTotalMediaTime];
-    if (total > 0) {
-        [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
-        [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
-    }
+    @try {
+        CGFloat current = [self currentVideoMediaTime];
+        CGFloat total = [self currentVideoTotalMediaTime];
+        if (total > 0) {
+            [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
+            [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
+        }
+    } @catch (NSException *e) {}
 }
 
 - (void)seekToTime:(CGFloat)time {
-    [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    @try {
+        [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    } @catch (NSException *e) {}
     %orig(time);
 }
 
 %end
 
+#pragma mark - Now Playing Liquid Glass Backdrop
+
 %hook YTMNowPlayingViewController
 
 - (void)viewDidLoad {
     %orig;
+    self.view.backgroundColor = [UIColor clearColor];
     if (!gSharedAmbientView) {
         gSharedAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
         gSharedAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -95,20 +130,59 @@ static AmbientView *gSharedAmbientView = nil;
 
 - (void)viewDidLayoutSubviews {
     %orig;
+    self.view.backgroundColor = [UIColor clearColor];
     if (gSharedAmbientView) {
         gSharedAmbientView.frame = self.view.bounds;
         [self.view sendSubviewToBack:gSharedAmbientView];
     }
+    for (UIView *subview in self.view.subviews) {
+        if (subview != gSharedAmbientView && [subview.backgroundColor isEqual:[UIColor blackColor]]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
 }
 
 - (void)didTapNextButton {
-    [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    @try {
+        [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    } @catch (NSException *e) {}
     %orig;
 }
 
 - (void)didTapPrevButton {
-    [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    @try {
+        [[AudioCrossfadeManager sharedInstance] notifyManualSkipOccurred];
+    } @catch (NSException *e) {}
     %orig;
+}
+
+%end
+
+#pragma mark - Browse Liquid Glass Backdrop
+
+%hook YTMBrowseViewController
+
+- (void)viewDidLoad {
+    %orig;
+    if (![ThemeManager sharedManager].isStaticMode) {
+        if (!gBrowseAmbientView) {
+            gBrowseAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
+            gBrowseAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [self.view insertSubview:gBrowseAmbientView atIndex:0];
+        }
+        self.view.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (![ThemeManager sharedManager].isStaticMode) {
+        self.view.backgroundColor = [UIColor clearColor];
+        if (gBrowseAmbientView) {
+            gBrowseAmbientView.frame = self.view.bounds;
+            [self.view sendSubviewToBack:gBrowseAmbientView];
+        }
+    }
 }
 
 %end
@@ -119,67 +193,17 @@ static AmbientView *gSharedAmbientView = nil;
 
 - (void)play {
     %orig;
-    [[AudioCrossfadeManager sharedInstance] registerActivePlayer:self];
+    @try {
+        [[AudioCrossfadeManager sharedInstance] registerActivePlayer:self];
+    } @catch (NSException *e) {}
 }
 
 - (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {
     %orig(item);
-    if (item) {
-        [[NetworkBufferOptimizer sharedInstance] optimizePlayerItem:item];
+    @try {
         [[AudioCrossfadeManager sharedInstance] registerActivePlayer:self];
-    }
+    } @catch (NSException *e) {}
 }
-
-%end
-
-%hook AVPlayerItem
-
-- (instancetype)initWithURL:(NSURL *)URL {
-    AVPlayerItem *item = %orig(URL);
-    if (item) {
-        [[NetworkBufferOptimizer sharedInstance] optimizePlayerItem:item];
-    }
-    return item;
-}
-
-- (instancetype)initWithAsset:(AVAsset *)asset {
-    AVPlayerItem *item = %orig(asset);
-    if (item) {
-        [[NetworkBufferOptimizer sharedInstance] optimizePlayerItem:item];
-    }
-    return item;
-}
-
-%end
-
-
-
-%group HAMChunkBufferGroup
-
-%hook HAMChunkBuffer
-
-- (double)targetBufferDuration {
-    if ([NetworkBufferOptimizer sharedInstance].deepBufferEnabled) {
-        return 120.0; // 120 seconds read-ahead window
-    }
-    return %orig;
-}
-
-- (double)maxBufferDuration {
-    if ([NetworkBufferOptimizer sharedInstance].deepBufferEnabled) {
-        return 180.0; // 3 minutes maximum cache headroom
-    }
-    return %orig;
-}
-
-- (double)minBufferDuration {
-    if ([NetworkBufferOptimizer sharedInstance].deepBufferEnabled) {
-        return 30.0; // 30 seconds minimum buffer before playback begins
-    }
-    return %orig;
-}
-
-%end
 
 %end
 
@@ -241,42 +265,14 @@ static AmbientView *gSharedAmbientView = nil;
 
 %end
 
-#pragma mark - Queue Pre-fetch Listener
-
-static void handleQueuePrefetchNotification(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    if (!gCurrentPlayerVC) return;
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        YTPlayerResponse *response = gCurrentPlayerVC.playerResponse;
-        if (!response) return;
-
-        NSString *hlsURL = response.playerData.streamingData.hlsManifestURL;
-        if (hlsURL.length > 0) {
-            [[NetworkBufferOptimizer sharedInstance] prefetchUpcomingTrackURL:[NSURL URLWithString:hlsURL] videoID:gCurrentPlayerVC.contentVideoID];
-        } else if (response.playerData.streamingData.adaptiveFormatsArray.count > 0) {
-            YTIFormatStream *firstFormat = response.playerData.streamingData.adaptiveFormatsArray.firstObject;
-            if (firstFormat.URL.length > 0) {
-                [[NetworkBufferOptimizer sharedInstance] prefetchUpcomingTrackURL:[NSURL URLWithString:firstFormat.URL] videoID:gCurrentPlayerVC.contentVideoID];
-            }
-        }
-    });
-}
-
 %ctor {
     NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"]];
-    if (dict[@"appleCrossfade"] == nil) dict[@"appleCrossfade"] = @(1);
+    if (dict[@"appleCrossfade"] == nil) dict[@"appleCrossfade"] = @(0);
     if (dict[@"appleCrossfadeDuration"] == nil) dict[@"appleCrossfadeDuration"] = @(5.0f);
-    if (dict[@"appleCrossfadeGaplessBypass"] == nil) dict[@"appleCrossfadeGaplessBypass"] = @(1);
-    if (dict[@"appleDeepBuffer"] == nil) dict[@"appleDeepBuffer"] = @(1);
-    if (dict[@"applePrefetchNext"] == nil) dict[@"applePrefetchNext"] = @(1);
+    if (dict[@"appleCrossfadeGaplessBypass"] == nil) dict[@"appleCrossfadeGaplessBypass"] = @(0);
+    if (dict[@"appleDeepBuffer"] == nil) dict[@"appleDeepBuffer"] = @(0);
+    if (dict[@"applePrefetchNext"] == nil) dict[@"applePrefetchNext"] = @(0);
     [[NSUserDefaults standardUserDefaults] setObject:dict forKey:@"YTMUltimate"];
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:@"YTMAppleTriggerQueuePrefetch" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        handleQueuePrefetchNotification(NULL, NULL, NULL, NULL, NULL);
-    }];
-
     %init;
-    if (objc_getClass("HAMChunkBuffer")) {
-        %init(HAMChunkBufferGroup);
-    }
 }

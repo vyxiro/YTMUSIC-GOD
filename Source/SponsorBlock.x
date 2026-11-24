@@ -20,18 +20,25 @@
     NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://sponsor.ajay.app/api/skipSegments?videoID=%@&categories=%@", self.currentVideoID, @"%5B%22music_offtopic%22%5D"]]];
 
     [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (!error) {
-            NSDictionary *jsonResponse = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([NSJSONSerialization isValidJSONObject:jsonResponse]) {
-                NSMutableDictionary *segments = [NSMutableDictionary dictionary];
-                for (NSDictionary *segmentDict in jsonResponse) {
-                    NSString *uuid = segmentDict[@"UUID"];
-                    [segments setObject:@(1) forKey:uuid];
+        if (!error && data) {
+            @try {
+                id jsonResponse = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if ([jsonResponse isKindOfClass:[NSArray class]]) {
+                    NSMutableDictionary *segments = [NSMutableDictionary dictionary];
+                    for (id segmentItem in (NSArray *)jsonResponse) {
+                        if ([segmentItem isKindOfClass:[NSDictionary class]]) {
+                            NSString *uuid = ((NSDictionary *)segmentItem)[@"UUID"];
+                            if (uuid) {
+                                [segments setObject:@(1) forKey:uuid];
+                            }
+                        }
+                    }
+                    if (self.currentVideoID) {
+                        [self.sponsorBlockValues setObject:jsonResponse forKey:self.currentVideoID];
+                        [self.sponsorBlockValues setObject:segments forKey:@"segments"];
+                    }
                 }
-
-                [self.sponsorBlockValues setObject:jsonResponse forKey:self.currentVideoID];
-                [self.sponsorBlockValues setObject:segments forKey:@"segments"];
-            }
+            } @catch (NSException *e) {}
         }
     }] resume];
 }
@@ -39,13 +46,13 @@
 - (void)singleVideo:(id)video currentVideoTimeDidChange:(id)time {
     %orig;
 
-    [self skipSegment];
+    @try { [self skipSegment]; } @catch (NSException *e) {}
 }
 
 - (void)potentiallyMutatedSingleVideo:(id)video currentVideoTimeDidChange:(id)time {
     %orig;
 
-    [self skipSegment];
+    @try { [self skipSegment]; } @catch (NSException *e) {}
 }
 
 %new

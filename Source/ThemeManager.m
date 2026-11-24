@@ -44,15 +44,15 @@ static NSString * const kOLEDKey = @"oledTheme";
 - (void)loadSettings {
     NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kYTMUltimateKey];
     if (dict) {
-        self.liquidTheme = dict[kLiquidThemeKey] ? [dict[kLiquidThemeKey] integerValue] : YTMLiquidThemeAmbient;
+        self.liquidTheme = dict[kLiquidThemeKey] ? [dict[kLiquidThemeKey] integerValue] : YTMLiquidThemeAuroraTeal;
         self.isLightMode = dict[kLightModeKey] ? [dict[kLightModeKey] boolValue] : NO;
         self.isStaticMode = dict[kStaticModeKey] ? [dict[kStaticModeKey] boolValue] : NO;
-        self.oledBlackEnabled = dict[kOLEDKey] ? [dict[kOLEDKey] boolValue] : YES;
+        self.oledBlackEnabled = dict[kOLEDKey] ? [dict[kOLEDKey] boolValue] : NO;
     } else {
-        self.liquidTheme = YTMLiquidThemeAmbient;
+        self.liquidTheme = YTMLiquidThemeAuroraTeal;
         self.isLightMode = NO;
         self.isStaticMode = NO;
-        self.oledBlackEnabled = YES;
+        self.oledBlackEnabled = NO;
         [self saveSettings];
     }
 }
@@ -74,7 +74,7 @@ static NSString * const kOLEDKey = @"oledTheme";
 #pragma mark - Theme Palette Colors (From User Liquid Glass Spec)
 
 - (UIColor *)baseColor1 {
-    if (self.oledBlackEnabled && !self.isLightMode && self.liquidTheme != YTMLiquidThemeAmbient) {
+    if (self.isStaticMode && self.oledBlackEnabled && !self.isLightMode) {
         return [UIColor blackColor];
     }
 
