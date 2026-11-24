@@ -2,6 +2,7 @@
 #import "PremiumSettingsController.h"
 #import "PlayerSettingsController.h"
 #import "AppleAudioSettingsController.h"
+#import "YTMAudioStudioSettingsController.h"
 #import "ThemeSettingsController.h"
 #import "NavBarSettingsController.h"
 #import "TabBarSettingsController.h"

@@ -76,6 +76,13 @@ static BOOL isLowContrast() {
 %end
 
 %hook YTMPlayerPageColorScheme
+- (UIColor *)playButtonColor {
+    if (![ThemeManager sharedManager].isStaticMode) {
+        return [[ThemeManager sharedManager] accentColor1];
+    }
+    return %orig;
+}
+
 - (UIColor *)backgroundColor {
     if (![ThemeManager sharedManager].isStaticMode) {
         return [UIColor clearColor];

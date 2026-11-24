@@ -77,7 +77,7 @@
         case 0:
             return 1;
         case 1:
-            return 6;
+            return 7;
         case 2:
             return 1;
         case 3:
@@ -126,6 +126,7 @@
             @{@"title": LOC(@"PREMIUM_SETTINGS"), @"image": @"flame"},
             @{@"title": LOC(@"PLAYER_SETTINGS"), @"image": @"play.rectangle"},
             @{@"title": @"Apple Audio & Network", @"image": @"waveform.path.badge.plus"},
+            @{@"title": @"Audio Studio & Hearing EQ", @"image": @"slider.horizontal.3"},
             @{@"title": LOC(@"THEME_SETTINGS"), @"image": @"paintbrush"},
             @{@"title": LOC(@"NAVBAR_SETTINGS"), @"image": @"sidebar.trailing"},
             @{@"title": LOC(@"TABBAR_SETTINGS"), @"image": @"dock.rectangle"}
@@ -215,9 +216,10 @@
         NSArray *controllers = @[[PremiumSettingsController class],
                                  [PlayerSettingsController class],
                                  [AppleAudioSettingsController class],
+                                 [YTMAudioStudioSettingsController class],
                                  [ThemeSettingsController class],
                                  [NavBarSettingsController class],
-                                 [OtherSettingsController class]];
+                                 [TabBarSettingsController class]];
 
         if (indexPath.row >= 0 && indexPath.row < controllers.count) {
             UIViewController *controller = [[controllers[indexPath.row] alloc] init];

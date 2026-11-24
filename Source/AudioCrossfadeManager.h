@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Player lifecycle & observation
 - (void)registerActivePlayer:(AVPlayer *)player;
 - (void)registerPlayerViewController:(id)playerVC;
+- (void)registerNowPlayingViewController:(id)nowPlayingVC;
 - (void)didUpdatePlaybackTime:(NSTimeInterval)currentTime duration:(NSTimeInterval)duration;
 - (void)notifyManualSkipOccurred;
 - (void)notifyTrackActivatedWithVideoID:(nullable NSString *)videoID player:(nullable AVPlayer *)player;

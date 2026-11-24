@@ -121,11 +121,17 @@ static AmbientView *gBrowseAmbientView = nil;
 - (void)viewDidLoad {
     %orig;
     self.view.backgroundColor = [UIColor clearColor];
+    [[AudioCrossfadeManager sharedInstance] registerNowPlayingViewController:self];
     if (!gSharedAmbientView) {
         gSharedAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
         gSharedAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self.view insertSubview:gSharedAmbientView atIndex:0];
     }
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    [[AudioCrossfadeManager sharedInstance] registerNowPlayingViewController:self];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -160,16 +166,40 @@ static AmbientView *gBrowseAmbientView = nil;
 
 #pragma mark - Browse Liquid Glass Backdrop
 
+@interface YTMActionRowView : UIView
+@end
+
+%hook YTMActionRowView
+- (void)layoutSubviews {
+    %orig;
+    if (![ThemeManager sharedManager].isStaticMode) {
+        self.backgroundColor = [UIColor clearColor];
+        for (UIView *sub in self.subviews) {
+            sub.backgroundColor = [UIColor clearColor];
+            if ([sub isKindOfClass:[UIScrollView class]]) {
+                for (UIView *btn in sub.subviews) {
+                    if ([btn isKindOfClass:[UIButton class]] || [btn isKindOfClass:%c(MDCButton)]) {
+                        btn.backgroundColor = [[ThemeManager sharedManager] glassBackgroundColor];
+                        btn.layer.cornerRadius = 18.0f;
+                        btn.layer.borderWidth = 1.0f;
+                        btn.layer.borderColor = [[ThemeManager sharedManager] glassBorderColor].CGColor;
+                        btn.clipsToBounds = YES;
+                    }
+                }
+            }
+        }
+    }
+}
+%end
+
 %hook YTMBrowseViewController
 
 - (void)viewDidLoad {
     %orig;
     if (![ThemeManager sharedManager].isStaticMode) {
-        if (!gBrowseAmbientView) {
-            gBrowseAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
-            gBrowseAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [self.view insertSubview:gBrowseAmbientView atIndex:0];
-        }
+        AmbientView *ambient = [[AmbientView alloc] initWithFrame:self.view.bounds];
+        ambient.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self.view insertSubview:ambient atIndex:0];
         self.view.backgroundColor = [UIColor clearColor];
     }
 }
@@ -178,10 +208,6 @@ static AmbientView *gBrowseAmbientView = nil;
     %orig;
     if (![ThemeManager sharedManager].isStaticMode) {
         self.view.backgroundColor = [UIColor clearColor];
-        if (gBrowseAmbientView) {
-            gBrowseAmbientView.frame = self.view.bounds;
-            [self.view sendSubviewToBack:gBrowseAmbientView];
-        }
     }
 }
 
@@ -267,7 +293,7 @@ static AmbientView *gBrowseAmbientView = nil;
 
 %ctor {
     NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"]];
-    if (dict[@"appleCrossfade"] == nil) dict[@"appleCrossfade"] = @(0);
+    if (dict[@"appleCrossfade"] == nil) dict[@"appleCrossfade"] = @(1);
     if (dict[@"appleCrossfadeDuration"] == nil) dict[@"appleCrossfadeDuration"] = @(5.0f);
     if (dict[@"appleCrossfadeGaplessBypass"] == nil) dict[@"appleCrossfadeGaplessBypass"] = @(0);
     if (dict[@"appleDeepBuffer"] == nil) dict[@"appleDeepBuffer"] = @(0);

@@ -10,6 +10,7 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 
 @property (nonatomic, weak) AVPlayer *activePlayer;
 @property (nonatomic, weak) id activePlayerVC;
+@property (nonatomic, weak) id nowPlayingVC;
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, assign) NSTimeInterval fadeStartTime;
 @property (nonatomic, assign) BOOL isFadingOut;
@@ -45,7 +46,7 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 - (void)loadSettings {
     NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kYTMUltimateKey];
     if (dict) {
-        self.crossfadeEnabled = dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : NO;
+        self.crossfadeEnabled = dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : YES;
         self.crossfadeDuration = dict[kCrossfadeDurationKey] ? [dict[kCrossfadeDurationKey] floatValue] : 5.0f;
         self.gaplessBypassEnabled = dict[kGaplessBypassKey] ? [dict[kGaplessBypassKey] boolValue] : NO;
     } else {
@@ -75,6 +76,11 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 - (void)registerPlayerViewController:(id)playerVC {
     if (!playerVC) return;
     self.activePlayerVC = playerVC;
+}
+
+- (void)registerNowPlayingViewController:(id)nowPlayingVC {
+    if (!nowPlayingVC) return;
+    self.nowPlayingVC = nowPlayingVC;
 }
 
 - (void)notifyManualSkipOccurred {
@@ -119,15 +125,15 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 #pragma mark - Playback Time Tracking & Equal-Power Crossfade
 
 - (void)didUpdatePlaybackTime:(NSTimeInterval)currentTime duration:(NSTimeInterval)duration {
-    if (!self.crossfadeEnabled || duration <= 0 || self.isCrossfading || self.isManualSkip) return;
+    if (!self.crossfadeEnabled || duration <= 6.0 || self.isCrossfading || self.isManualSkip) return;
 
     self.lastObservedDuration = duration;
     NSTimeInterval remaining = duration - currentTime;
     NSTimeInterval window = MAX(1.0, (NSTimeInterval)self.crossfadeDuration);
 
-    // Trigger fade-out when reaching the configured remaining duration window
-    if (remaining > 0 && remaining <= window && !self.isFadingOut) {
-        [self startFadeOut];
+    if (remaining > 0 && remaining <= window) {
+        self.isCrossfading = YES;
+        [self triggerQueueAdvance];
     }
 }
 
@@ -182,9 +188,13 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 
 - (void)triggerQueueAdvance {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.activePlayerVC && [self.activePlayerVC respondsToSelector:@selector(didTapNextButton)]) {
-            [self.activePlayerVC performSelector:@selector(didTapNextButton)];
+        id target = self.nowPlayingVC ?: self.activePlayerVC;
+        if (target && [target respondsToSelector:@selector(didTapNextButton)]) {
+            [target performSelector:@selector(didTapNextButton)];
         }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            self.isCrossfading = NO;
+        });
     });
 }
 
