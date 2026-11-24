@@ -5,6 +5,8 @@
 @property (nonatomic, strong) UITableView* tableView;
 @end
 
+@compatibility_alias TabBarSettingsController OtherSettingsController;
+
 @interface YTAssetLoader : NSObject
 - (instancetype)initWithBundle:(NSBundle *)bundle;
 - (UIImage *)imageNamed:(NSString *)image;
