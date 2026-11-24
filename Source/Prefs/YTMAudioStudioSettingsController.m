@@ -167,14 +167,16 @@
 
 - (void)showAutoEqEditor {
     YTMAutoEqTextController *editor = [[YTMAutoEqTextController alloc] init];
+    __weak typeof(editor) weakEditor = editor;
+    __weak typeof(self) weakSelf = self;
     editor.importHandler = ^(NSString *text) {
         NSError *error = nil;
-        if ([self.manager importAutoEqProfileFromText:text error:&error]) {
-            [editor dismissViewControllerAnimated:YES completion:^{ [self.tableView reloadData]; }];
+        if ([weakSelf.manager importAutoEqProfileFromText:text error:&error]) {
+            [weakEditor dismissViewControllerAnimated:YES completion:^{ [weakSelf.tableView reloadData]; }];
         } else {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Import Failed" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [editor presentViewController:alert animated:YES completion:nil];
+            [weakEditor presentViewController:alert animated:YES completion:nil];
         }
     };
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
