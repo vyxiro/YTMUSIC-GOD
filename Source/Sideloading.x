@@ -21,23 +21,26 @@
 @interface SSOConfiguration : NSObject
 @end
 
-static NSString *accessGroupID() {
-    NSDictionary *query = [NSDictionary dictionaryWithObjectsAndKeys:
-                           (__bridge NSString *)kSecClassGenericPassword, (__bridge NSString *)kSecClass,
-                           @"bundleSeedID", kSecAttrAccount,
-                           @"", kSecAttrService,
-                           (id)kCFBooleanTrue, kSecReturnAttributes,
-                           nil];
-    CFDictionaryRef result = nil;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, (CFTypeRef *)&result);
-    if (status == errSecItemNotFound) {
-        status = SecItemAdd((__bridge CFDictionaryRef)query, (CFTypeRef *)&result);
-        if (status != errSecSuccess) {
-            return nil;
+static NSString *accessGroupID(void) {
+    static NSString *group;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSDictionary *q = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrAccount: @"bundleSeedID",
+            (__bridge id)kSecAttrService: @"",
+            (__bridge id)kSecReturnAttributes: @YES
+        };
+        CFDictionaryRef res = NULL;
+        OSStatus s = SecItemCopyMatching((__bridge CFDictionaryRef)q, (CFTypeRef *)&res);
+        if (s == errSecItemNotFound)
+            s = SecItemAdd((__bridge CFDictionaryRef)q, (CFTypeRef *)&res);
+        if (s == errSecSuccess && res) {
+            NSDictionary *d = CFBridgingRelease(res);
+            group = [d[(__bridge id)kSecAttrAccessGroup] copy];
         }
-    }
-    NSString *accessGroup = [(__bridge NSDictionary *)result objectForKey:(__bridge NSString *)kSecAttrAccessGroup];
-    return accessGroup;
+    });
+    return group;
 }
 
 // Fix login (2) - Ginsu & AhmedBakfir
@@ -193,19 +196,17 @@ static NSString *accessGroupID() {
 
 %hook NSBundle
 - (NSString *)bundleIdentifier {
-    if (self == [NSBundle mainBundle]) {
-        return YT_BUNDLE_ID;
+    NSString *orig = %orig;
+    if (self != NSBundle.mainBundle) return orig;
+    NSArray *addrs = [NSThread callStackReturnAddresses];
+    if (addrs.count > 1) {
+        Dl_info info;
+        if (dladdr((void *)[addrs[1] unsignedLongLongValue], &info) && info.dli_fname) {
+            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+            if ([path hasPrefix:NSBundle.mainBundle.bundlePath]) return YT_BUNDLE_ID;
+        }
     }
-    return %orig;
-}
-- (id)objectForInfoDictionaryKey:(NSString *)key {
-    if ([key isEqualToString:@"CFBundleIdentifier"])
-        return YT_BUNDLE_ID;
-    if ([key isEqualToString:@"CFBundleDisplayName"])
-        return YT_NAME;
-    if ([key isEqualToString:@"CFBundleName"])
-        return YT_BUNDLE_NAME;
-    return %orig;
+    return orig;
 }
 %end
 /*IAmYouTube end */

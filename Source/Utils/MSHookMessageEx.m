@@ -1,34 +1,22 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
 #import "MSHookMessageEx.h"
 
-void MSHookMessageEx(Class _class, SEL sel, IMP imp, IMP *result) {
-    if (!_class || !sel || !imp) return;
-    
-    Method method = class_getInstanceMethod(_class, sel);
-    BOOL isClassMethod = NO;
-    if (!method) {
-        method = class_getClassMethod(_class, sel);
-        isClassMethod = YES;
-    }
-    if (!method) return;
+void MSHookMessageEx(Class cls, SEL sel, IMP imp, IMP *result) {
+    if (result) *result = NULL;
+    if (!cls || !sel || !imp) return;
 
-    Class targetClass = isClassMethod ? object_getClass((id)_class) : _class;
-    const char *typeEncoding = method_getTypeEncoding(method);
+    // Logos already passes the metaclass for + methods.
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
 
-    IMP originalImp = method_getImplementation(method);
-    if (result) {
-        *result = originalImp;
-    }
+    const char *enc = method_getTypeEncoding(m);
+    IMP orig = method_getImplementation(m);
 
-    if (class_addMethod(targetClass, sel, imp, typeEncoding)) {
-        // Method was newly added to targetClass, pointing to new imp
+    if (class_addMethod(cls, sel, imp, enc)) {
+        if (result) *result = orig;
     } else {
-        // Method already existed on targetClass, replace implementation
-        IMP previous = method_setImplementation(method, imp);
-        if (result && previous) {
-            *result = previous;
-        }
+        IMP prev = method_setImplementation(m, imp);
+        if (result && prev) *result = prev;
     }
 }
