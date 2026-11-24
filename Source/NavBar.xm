@@ -1,3 +1,4 @@
+#import "ThemeManager.h"
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
@@ -35,6 +36,9 @@ static BOOL YTMU(NSString *key) {
 %hook YTMNavigationBarView
 - (void)layoutSubviews {
     %orig;
+    if (![ThemeManager sharedManager].isStaticMode) {
+        self.backgroundColor = [UIColor clearColor];
+    }
 
     NSArray *subviews = [self subviews];
 
