@@ -14,13 +14,10 @@ static float YTMClamp(float value, float low, float high) {
 @property (nonatomic, strong) dispatch_queue_t stateQueue;
 @property (nonatomic, strong) AVAudioEngine *engine;
 @property (nonatomic, strong, readwrite) AVAudioUnitEQ *equalizer;
-@property (nonatomic, strong) AVAudioUnitDynamicsProcessor *limiter;
 @property (nonatomic, copy, readwrite) NSArray<NSString *> *presetNames;
 @property (nonatomic, copy, readwrite) NSString *selectedPresetName;
 @property (nonatomic, assign, readwrite) float preampOffsetDB;
 @property (nonatomic, assign, readwrite) BOOL limiterEnabled;
-@property (nonatomic, assign, readwrite, getter=isEnabled) BOOL enabled;
-@property (nonatomic, assign) BOOL adaptiveLoudnessEnabled;
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *bands;
 @property (nonatomic, strong) NSDictionary<NSString *, NSDictionary *> *presets;
 @property (nonatomic, assign) float importedPreampDB;
@@ -30,13 +27,13 @@ static float YTMClamp(float value, float low, float high) {
 @property (nonatomic, assign) float adaptiveTrebleDelta;
 - (instancetype)initPrivate;
 - (NSDictionary<NSString *, NSDictionary *> *)buildPresets;
-- (void)configureLimiter;
 - (void)updatePreamp;
 - (void)saveImportedProfile;
 - (NSString *)routeKeyForCurrentOutput;
 @end
 
 @implementation YTMAudioStudioManager
+@synthesize enabled = _enabled, adaptiveLoudnessEnabled = _adaptiveLoudnessEnabled;
 
 + (instancetype)sharedManager {
     static YTMAudioStudioManager *manager;
@@ -52,7 +49,6 @@ static float YTMClamp(float value, float low, float high) {
     if (!self) return nil;
     _stateQueue = dispatch_queue_create("com.ytmu.audio-studio.state", DISPATCH_QUEUE_SERIAL);
     _equalizer = [[AVAudioUnitEQ alloc] initWithNumberOfBands:kBandCount];
-    _limiter = [[AVAudioUnitDynamicsProcessor alloc] init];
     _bands = [NSMutableArray arrayWithCapacity:kBandCount];
     _presetNames = @[@"Flat (Bypass)", @"Harman Target Clarity", @"Apple Music Spatial Warmth", @"Deep Sub-Bass + Clean Vocals", @"Speech & Lyric Focus", @"My Hearing Profile", @"Imported AutoEq"];
     _presets = [self buildPresets];
@@ -68,7 +64,6 @@ static float YTMClamp(float value, float low, float high) {
         filter.bypass = YES;
         [_bands addObject:[@{@"frequency": @(kDefaultFrequencies[i]), @"gain": @0.0f, @"q": @1.41f, @"bypass": @YES, @"type": @0} mutableCopy]];
     }
-    [self configureLimiter];
     [self loadSettings];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(routeChanged:) name:AVAudioSessionRouteChangeNotification object:nil];
     @try {
@@ -94,14 +89,6 @@ static float YTMClamp(float value, float low, float high) {
              @"Apple Music Spatial Warmth": @{ @"gains": warm, @"q": defaultQ },
              @"Deep Sub-Bass + Clean Vocals": @{ @"gains": deep, @"q": deepQ },
              @"Speech & Lyric Focus": @{ @"gains": speech, @"q": defaultQ }};
-}
-
-- (void)configureLimiter {
-    self.limiter.threshold = -1.0f;
-    self.limiter.headRoom = 0.5f;
-    self.limiter.expansionRatio = 1.0f;
-    self.limiter.attackTime = 0.001f;
-    self.limiter.releaseTime = 0.050f;
 }
 
 - (void)loadSettings {
