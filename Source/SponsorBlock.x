@@ -96,6 +96,7 @@
 %end
 
 %ctor {
+    %init;
     NSMutableDictionary *mutableDict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"]];
 
     if (mutableDict[@"sbSkipMode"] == nil) {

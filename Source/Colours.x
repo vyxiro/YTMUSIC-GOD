@@ -212,6 +212,7 @@ static BOOL isLowContrast() {
 %end
 
 #pragma mark - Low contrast mode
+%group CommonColorPaletteGroup
 %hook YTCommonColorPalette
 - (UIColor *)textPrimary { 
     return isLowContrast() ? [UIColor colorWithWhite:0.565 alpha:1] : %orig;
@@ -220,15 +221,13 @@ static BOOL isLowContrast() {
     return isLowContrast() ? [UIColor colorWithWhite:0.565 alpha:1] : %orig;
 }
 %end
-
-%hook UIColor
-+ (UIColor *)whiteColor {
-    return isLowContrast() ? [UIColor colorWithWhite:0.565 alpha:1] : %orig;
-}
 %end
 
 %ctor {
     %init;
+    if (objc_getClass("YTCommonColorPalette")) {
+        %init(CommonColorPaletteGroup);
+    }
     if (objc_getClass("UIKeyboardLayoutStar")) {
         %init(OLEDKeyboardGroup);
     }

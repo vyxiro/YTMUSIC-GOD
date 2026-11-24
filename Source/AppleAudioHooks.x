@@ -113,22 +113,6 @@ static AmbientView *gSharedAmbientView = nil;
 
 %end
 
-// Feed album artwork to AmbientView
-%hook UIImageView
-
-- (void)setImage:(UIImage *)image {
-    %orig(image);
-
-    if (image && gSharedAmbientView && gSharedAmbientView.window && gSharedAmbientView.glowEnabled) {
-        CGSize sz = image.size;
-        if (sz.width >= 150 && sz.height >= 150 && fabs(sz.width - sz.height) < 30) {
-            [gSharedAmbientView updateWithArtworkImage:image animated:YES];
-        }
-    }
-}
-
-%end
-
 #pragma mark - AVFoundation Layer Hooks
 
 %hook AVPlayer
@@ -168,23 +152,7 @@ static AmbientView *gSharedAmbientView = nil;
 
 %end
 
-#pragma mark - Network Layer & Buffer Hooks
 
-%hook NSURLSessionConfiguration
-
-+ (NSURLSessionConfiguration *)defaultSessionConfiguration {
-    NSURLSessionConfiguration *config = %orig;
-    [[NetworkBufferOptimizer sharedInstance] tuneSessionConfiguration:config];
-    return config;
-}
-
-+ (NSURLSessionConfiguration *)ephemeralSessionConfiguration {
-    NSURLSessionConfiguration *config = %orig;
-    [[NetworkBufferOptimizer sharedInstance] tuneSessionConfiguration:config];
-    return config;
-}
-
-%end
 
 %group HAMChunkBufferGroup
 

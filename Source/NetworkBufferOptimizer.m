@@ -48,7 +48,7 @@ static NSString * const kCacheSubdir = @"YTMAppleAudioCache";
 }
 
 - (void)setupPrefetchSession {
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     config.timeoutIntervalForRequest = 45.0;
     config.timeoutIntervalForResource = 300.0;
     config.waitsForConnectivity = YES;
