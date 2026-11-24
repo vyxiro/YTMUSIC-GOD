@@ -142,8 +142,11 @@ static AmbientView *gBrowseAmbientView = nil;
         [self.view sendSubviewToBack:gSharedAmbientView];
     }
     for (UIView *subview in self.view.subviews) {
-        if (subview != gSharedAmbientView && [subview.backgroundColor isEqual:[UIColor blackColor]]) {
-            subview.backgroundColor = [UIColor clearColor];
+        // Preserve video playback layers so Video mode is never broken
+        if (subview != gSharedAmbientView && ![subview isKindOfClass:%c(YTPlayerView)] && ![subview isKindOfClass:%c(HAMVideoView)]) {
+            if ([subview.backgroundColor isEqual:[UIColor blackColor]]) {
+                subview.backgroundColor = [UIColor clearColor];
+            }
         }
     }
 }
