@@ -44,26 +44,32 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 }
 
 - (void)loadSettings {
-    NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kYTMUltimateKey];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDictionary *dict = [defaults dictionaryForKey:kYTMUltimateKey];
     if (dict) {
-        self.crossfadeEnabled = dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : YES;
-        self.crossfadeDuration = dict[kCrossfadeDurationKey] ? [dict[kCrossfadeDurationKey] floatValue] : 5.0f;
+        id lgEnabled = [defaults objectForKey:@"LG_xfade"];
+        id lgSecs = [defaults objectForKey:@"LG_xfade_secs"];
+        self.crossfadeEnabled = lgEnabled ? [lgEnabled boolValue] : (dict[kCrossfadeKey] ? [dict[kCrossfadeKey] boolValue] : YES);
+        self.crossfadeDuration = lgSecs ? [lgSecs floatValue] : (dict[kCrossfadeDurationKey] ? [dict[kCrossfadeDurationKey] floatValue] : 6.0f);
         self.gaplessBypassEnabled = dict[kGaplessBypassKey] ? [dict[kGaplessBypassKey] boolValue] : NO;
     } else {
         self.crossfadeEnabled = NO;
-        self.crossfadeDuration = 5.0f;
+        self.crossfadeDuration = 6.0f;
         self.gaplessBypassEnabled = NO;
         [self saveSettings];
     }
 }
 
 - (void)saveSettings {
-    NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:kYTMUltimateKey]];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[defaults dictionaryForKey:kYTMUltimateKey]];
     dict[kCrossfadeKey] = @(self.crossfadeEnabled);
     dict[kCrossfadeDurationKey] = @(self.crossfadeDuration);
     dict[kGaplessBypassKey] = @(self.gaplessBypassEnabled);
-    [[NSUserDefaults standardUserDefaults] setObject:dict forKey:kYTMUltimateKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+    [defaults setObject:dict forKey:kYTMUltimateKey];
+    [defaults setBool:self.crossfadeEnabled forKey:@"LG_xfade"];
+    [defaults setDouble:(double)self.crossfadeDuration forKey:@"LG_xfade_secs"];
+    [defaults synchronize];
 }
 
 #pragma mark - Registration & State Management
@@ -125,16 +131,8 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
 #pragma mark - Playback Time Tracking & Equal-Power Crossfade
 
 - (void)didUpdatePlaybackTime:(NSTimeInterval)currentTime duration:(NSTimeInterval)duration {
-    if (!self.crossfadeEnabled || duration <= 6.0 || self.isCrossfading || self.isManualSkip) return;
-
+    // Handled cleanly by LGCrossfade engine.
     self.lastObservedDuration = duration;
-    NSTimeInterval remaining = duration - currentTime;
-    NSTimeInterval window = MAX(1.0, (NSTimeInterval)self.crossfadeDuration);
-
-    if (remaining > 0 && remaining <= window) {
-        self.isCrossfading = YES;
-        [self triggerQueueAdvance];
-    }
 }
 
 - (void)startFadeOut {

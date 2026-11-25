@@ -1,7 +1,10 @@
 #import "AppleAudioSettingsController.h"
+#import "../LGCrossfade.h"
+#import "../LiquidGlass.h"
 
 @interface AppleAudioSettingsController ()
 @property (nonatomic, strong) UILabel *crossfadeDurationLabel;
+@property (nonatomic, strong) UILabel *crossfadeStatusLabel;
 @property (nonatomic, strong) UISlider *crossfadeSlider;
 @property (nonatomic, strong) UILabel *cacheSizeLabel;
 @end
@@ -52,7 +55,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
-        case 0: return 3; // Switch, Slider, Gapless switch
+        case 0: return 4; // Status, Switch, Slider, Gapless switch
         case 1: return 2; // Deep buffer switch, Prefetch switch
         case 2: return 1; // Clear cache
         default: return 0;
@@ -72,20 +75,26 @@
 
     AudioCrossfadeManager *audioMgr = [AudioCrossfadeManager sharedInstance];
     NetworkBufferOptimizer *netMgr = [NetworkBufferOptimizer sharedInstance];
+    UIColor *accent = LGTheme.shared.palette.a1 ?: [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
 
     // SECTION 0: CROSSFADE
     if (indexPath.section == 0) {
         if (indexPath.row == 0) {
+            cell.textLabel.text = @"Crossfade Engine Status";
+            cell.detailTextLabel.text = LGCrossfade.shared.status;
+            cell.detailTextLabel.numberOfLines = 0;
+            self.crossfadeStatusLabel = cell.detailTextLabel;
+        } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Apple Music Crossfade";
             cell.detailTextLabel.text = @"Smooth equal-power fade transition between songs";
             cell.detailTextLabel.numberOfLines = 0;
 
             ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
+            sw.onTintColor = accent;
             sw.on = audioMgr.crossfadeEnabled;
             [sw addTarget:self action:@selector(crossfadeToggled:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
-        } else if (indexPath.row == 1) {
+        } else if (indexPath.row == 2) {
             cell.textLabel.text = [NSString stringWithFormat:@"Crossfade Duration: %.1f s", audioMgr.crossfadeDuration];
             cell.detailTextLabel.text = @"Adjust transition duration (1.0s to 12.0s)";
             self.crossfadeDurationLabel = cell.textLabel;
@@ -94,17 +103,17 @@
             slider.minimumValue = 1.0f;
             slider.maximumValue = 12.0f;
             slider.value = audioMgr.crossfadeDuration;
-            slider.tintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
+            slider.minimumTrackTintColor = accent;
             [slider addTarget:self action:@selector(crossfadeSliderChanged:) forControlEvents:UIControlEventValueChanged];
             self.crossfadeSlider = slider;
             cell.accessoryView = slider;
-        } else if (indexPath.row == 2) {
+        } else if (indexPath.row == 3) {
             cell.textLabel.text = @"Gapless Album Detection";
             cell.detailTextLabel.text = @"Bypasses crossfade on continuous album tracks";
             cell.detailTextLabel.numberOfLines = 0;
 
             ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
+            sw.onTintColor = accent;
             sw.on = audioMgr.gaplessBypassEnabled;
             [sw addTarget:self action:@selector(gaplessToggled:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
@@ -158,6 +167,8 @@
 - (void)crossfadeToggled:(UISwitch *)sender {
     [AudioCrossfadeManager sharedInstance].crossfadeEnabled = sender.isOn;
     [[AudioCrossfadeManager sharedInstance] saveSettings];
+    if (!sender.isOn) [[LGCrossfade shared] cancel];
+    self.crossfadeStatusLabel.text = LGCrossfade.shared.status;
 }
 
 - (void)crossfadeSliderChanged:(UISlider *)sender {
@@ -165,6 +176,7 @@
     [AudioCrossfadeManager sharedInstance].crossfadeDuration = rounded;
     [[AudioCrossfadeManager sharedInstance] saveSettings];
     self.crossfadeDurationLabel.text = [NSString stringWithFormat:@"Crossfade Duration: %.1f s", rounded];
+    self.crossfadeStatusLabel.text = LGCrossfade.shared.status;
 }
 
 - (void)gaplessToggled:(UISwitch *)sender {

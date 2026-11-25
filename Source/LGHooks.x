@@ -1,10 +1,13 @@
 // LGHooks.x : MPNowPlayingInfoCenter hook + Step 1 ambient & audio discovery diagnostics + Phase 2 view dumper.
 // Zero unconfirmed YouTube class hooks. Nothing touches UIKit inside %ctor.
 #import "LiquidGlass.h"
+#import "LGCrossfade.h"
 #import "AudioCrossfadeManager.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
+
+extern NSString *YTMObservedAudioBackend(void);
 
 static BOOL gMPClassExistedAtInstall = NO;
 
@@ -133,6 +136,8 @@ NSString *LGBuildDiagnosticReport(void) {
     }
 
     [out appendString:@"\n=== AUDIO PHASE A PROBE (READ-ONLY) ===\n"];
+    [out appendFormat:@"LGCrossfade.status: %@\n", LGCrossfade.shared.status];
+    [out appendFormat:@"Observed native audio backend: %@\n", YTMObservedAudioBackend()];
     AudioCrossfadeManager *acm = [AudioCrossfadeManager sharedInstance];
     [out appendFormat:@"Crossfade enabled: %d | duration: %.1fs | isCrossfading: %d | videoID: %@\n",
      acm.crossfadeEnabled, acm.crossfadeDuration, acm.isCrossfading, [acm valueForKey:@"currentVideoID"] ?: @"-"];
@@ -196,6 +201,7 @@ NSString *LGBuildDiagnosticReport(void) {
 - (void)setNowPlayingInfo:(NSDictionary *)info {
     %orig;
     LGIngestNowPlayingInfo(info);
+    [[LGCrossfade shared] noteNowPlayingInfo:info];
 }
 %end
 
