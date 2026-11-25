@@ -160,12 +160,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
                             UIImage *img = [UIImage imageWithData:data];
                             if (img) {
                                 dispatch_async(dispatch_get_main_queue(), ^{
-                                    if (gSharedAmbientView) {
-                                        [gSharedAmbientView updateWithArtworkImage:img animated:YES];
-                                    }
-                                    if (gBrowseAmbientView) {
-                                        [gBrowseAmbientView updateWithArtworkImage:img animated:YES];
-                                    }
+                                    [LGTheme.shared ingestArtwork:img trackKey:(videoID ?: urlStr)];
                                     [[NSNotificationCenter defaultCenter] postNotificationName:@"YTMArtworkDidUpdateNotification" object:img];
                                 });
                             }
