@@ -52,6 +52,10 @@ extern NSString *const LGPaletteDidChangeNotification;
 @property (nonatomic, readonly) NSString *ambientStatus;          // for a live status row in Settings
 @end
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Diagnostics: how many times YouTube Music updated Now Playing info (0 = hook not installed/firing).
 NSUInteger LGNowPlayingHookCount(void);
 
@@ -62,12 +66,15 @@ id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode))
 // Call from the MPNowPlayingInfoCenter hook (see LGHooks.x). No YouTube class names needed.
 void LGIngestNowPlayingInfo(NSDictionary *info);
 
+LGBackgroundView *LGInstallBackground(UIView *host);
+LGGlassView *LGAttachGlass(UIView *host, CGFloat radius);
+
+#ifdef __cplusplus
+}
+#endif
+
 // Optional, experimental: sample the on-screen video container about every 1.5 s.
 @interface LGVideoSampler : NSObject
 + (void)startForView:(UIView *)videoContainer;
 + (void)stop;
 @end
-
-LGBackgroundView *LGInstallBackground(UIView *host);
-LGGlassView *LGAttachGlass(UIView *host, CGFloat radius);
-LGGlassView *LGAttachGlass(UIView *host, CGFloat radius);
