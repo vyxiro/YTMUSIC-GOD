@@ -1,6 +1,7 @@
-// LiquidGlass.h  v2  (supersedes v1)
+// LiquidGlass.h  v2.1  (supersedes v1/v2)
 // Adds: unlimited ambient colours from cover/video, Static+Ambient, static-look palettes,
-// accent glyph colour, track-change ingestion via MPNowPlayingInfoCenter, video-frame sampling.
+// accent glyph colour, track-change ingestion via MPNowPlayingInfoCenter, video-frame sampling,
+// live ambientStatus diagnostics, and LGObserveTheme.
 // Settings keys (NSUserDefaults):
 //   LG_style        "liquid" | "static"      (LG_static BOOL still honoured)
 //   LG_ambient      BOOL    colours follow the playing track (any colour, any mode)
@@ -46,7 +47,15 @@ extern NSString *const LGPaletteDidChangeNotification;
 - (void)reload;                                                   // re-read prefs, post notification
 - (void)ingestArtwork:(UIImage *)image trackKey:(NSString *)key;  // call on every track change
 - (void)ingestVideoFrame:(UIImage *)frame;                        // called by LGVideoSampler
+@property (nonatomic, readonly) NSString *ambientStatus;          // for a live status row in Settings
 @end
+
+// Diagnostics: how many times YouTube Music updated Now Playing info (0 = hook not installed/firing).
+NSUInteger LGNowPlayingHookCount(void);
+
+// Fixes stale accents: register once when a view is created. Runs now AND on every palette change.
+// Use it for play/pause tint, progress fill, headphone pill, selected chip/tab, switches, sliders.
+id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode));
 
 // Call from the MPNowPlayingInfoCenter hook (see LGHooks.x). No YouTube class names needed.
 void LGIngestNowPlayingInfo(NSDictionary *info);

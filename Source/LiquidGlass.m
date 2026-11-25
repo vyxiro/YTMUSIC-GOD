@@ -1,4 +1,4 @@
-// LiquidGlass.m  v2  - Merged with v1 ARC/thread-safety/nil-guards + temporary diagnostics.
+// LiquidGlass.m  v2.1  - Merged with ARC/thread-safety/nil-guards + Step 1 ambient diagnostics.
 #import "LiquidGlass.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
@@ -13,14 +13,6 @@ static UIColor *LGHex(NSString *h) {
     if (![h isKindOfClass:NSString.class] || h.length < 2) return [UIColor clearColor];
     unsigned v = 0; [[NSScanner scannerWithString:[h substringFromIndex:1]] scanHexInt:&v];
     return [UIColor colorWithRed:((v >> 16) & 255) / 255.0 green:((v >> 8) & 255) / 255.0 blue:(v & 255) / 255.0 alpha:1];
-}
-static NSString *LGColorHex(UIColor *c) {
-    if (!c) return @"#nil";
-    CGFloat r = 0, g = 0, b = 0, a = 0;
-    if ([c getRed:&r green:&g blue:&b alpha:&a]) {
-        return [NSString stringWithFormat:@"#%02X%02X%02X", (int)round(r * 255), (int)round(g * 255), (int)round(b * 255)];
-    }
-    return @"#nonRGB";
 }
 static inline CGFloat LGClamp(CGFloat x, CGFloat lo, CGFloat hi) { return MAX(lo, MIN(hi, x)); }
 static UIColor *LGHSB(CGFloat h, CGFloat s, CGFloat b) {
@@ -55,6 +47,16 @@ static CGFloat LGAnalog(CGFloat h1) {
     CGFloat h2 = fmod(h1 + .07, 1.0);
     if (h2 >= .17 && h2 <= .45 && !(h1 >= .17 && h1 <= .45)) h2 = fmod(h1 - .07 + 1.0, 1.0);
     return h2;
+}
+
+static NSUInteger sHookFires = 0, sArtIngests = 0;
+static NSString *LGHexString(UIColor *c) {
+    if (!c) return @"#nil";
+    CGFloat r = 0, g = 0, b = 0;
+    if ([c getRed:&r green:&g blue:&b alpha:NULL]) {
+        return [NSString stringWithFormat:@"#%02X%02X%02X", (int)round(r * 255), (int)round(g * 255), (int)round(b * 255)];
+    }
+    return @"#nonRGB";
 }
 
 #pragma mark - image helpers
@@ -196,7 +198,7 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
 #pragma mark - LGTheme
 @implementation LGTheme {
     LGPalette *_art; UIImage *_lastImage; NSString *_lastKey; BOOL _artDark;
-    NSDate *_lastVideoApply; int _blackStreak; BOOL _videoUnsupported;
+    NSDate *_lastVideoApply; int _blackStreak; BOOL _videoUnsupported; NSString *_lastTrack;
 }
 + (LGTheme *)shared { static LGTheme *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [LGTheme new]; [t reloadSilently]; }); return t; }
 - (void)reloadSilently {
@@ -228,15 +230,18 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
         BOOL dark = YES;
         @synchronized(self) {
             if (![key isEqualToString:self->_lastKey]) {
-                self->_lastKey = key; self->_lastImage = image; self->_blackStreak = 0;
+                self->_lastKey = key; self->_lastImage = image; self->_blackStreak = 0; self->_lastTrack = trackKey; sArtIngests++;
                 shouldExtract = self->_ambient;
                 dark = self->_dark;
             }
         }
-        if (!shouldExtract) return;
+        if (!shouldExtract) {
+            [NSNotificationCenter.defaultCenter postNotificationName:LGPaletteDidChangeNotification object:nil];
+            return;
+        }
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             LGPalette *p = [LGPalette paletteFromImage:image dark:dark];
-            NSLog(@"[LG] ingestArtwork extracted a1=%@ b1=%@ dark=%d key='%@'", LGColorHex(p.a1), LGColorHex(p.b1), dark, trackKey ?: @"");
+            NSLog(@"[LG] ingestArtwork extracted a1=%@ b1=%@ dark=%d key='%@'", LGHexString(p.a1), LGHexString(p.b1), dark, trackKey ?: @"");
             dispatch_async(dispatch_get_main_queue(), ^{
                 @synchronized(self) {
                     if (!p || ![key isEqualToString:self->_lastKey]) return;
@@ -246,6 +251,13 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
             });
         });
     });
+}
+- (NSString *)ambientStatus {
+    @synchronized(self) {
+        if (!_ambient) return [NSString stringWithFormat:@"Ambient is off (Now Playing updates: %lu, artworks: %lu)", (unsigned long)sHookFires, (unsigned long)sArtIngests];
+        if (!_art) return [NSString stringWithFormat:@"Waiting for artwork. Now Playing updates: %lu, artworks received: %lu", (unsigned long)sHookFires, (unsigned long)sArtIngests];
+        return [NSString stringWithFormat:@"Active: accent %@ from \"%@\"", LGHexString(_art.a1), _lastTrack ?: @"current track"];
+    }
 }
 - (void)ingestVideoFrame:(UIImage *)frame {   // main thread
     if (!_ambient || !frame || _videoUnsupported) return;
@@ -264,31 +276,47 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
         }
         _lastVideoApply = now; _art = p; _artDark = _dark;
     }
-    NSLog(@"[LG] ingestVideoFrame usable: extracted a1=%@", LGColorHex(p.a1));
+    NSLog(@"[LG] ingestVideoFrame usable: extracted a1=%@", LGHexString(p.a1));
     [self reload];
 }
 @end
 
 void LGIngestNowPlayingInfo(NSDictionary *info) {
     if (![info isKindOfClass:NSDictionary.class]) return;
+    sHookFires++;
     MPMediaItemArtwork *art = info[MPMediaItemPropertyArtwork];
     NSString *title = info[MPMediaItemPropertyTitle] ?: @"", *artist = info[MPMediaItemPropertyArtist] ?: @"";
+    NSNumber *elapsed = info[MPMediaItemPropertyElapsedPlaybackTime];
+    NSNumber *dur = info[MPMediaItemPropertyPlaybackDuration];
+    NSLog(@"[LG] MPNowPlayingInfoCenter fire #%lu: title='%@' artist='%@' artwork=%@ elapsed=%@ dur=%@",
+          (unsigned long)sHookFires, title, artist, art ? @"YES" : @"NO", elapsed ?: @"-", dur ?: @"-");
+    if (!art) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:LGPaletteDidChangeNotification object:nil];
+        });
+        return;
+    }
     NSString *ta = [NSString stringWithFormat:@"%@|%@", title, artist];
-    static NSString *lastTA; static NSDate *lastAt; static NSUInteger fireCount = 0;
+    static NSString *lastTA; static NSDate *lastAt;
     BOOL same = [ta isEqualToString:lastTA];
-    if (!same) fireCount = 0;
-    fireCount++;
-    NSLog(@"[LG] LGIngestNowPlayingInfo (fire #%lu for track): title='%@' artist='%@' artwork=%@",
-          (unsigned long)fireCount, title, artist, art ? @"YES" : @"NO");
-    if (!art) return;
     if (same && lastAt && [[NSDate date] timeIntervalSinceDate:lastAt] < 1.0) return;   // the app re-posts this dictionary often
     lastTA = ta; lastAt = [NSDate date];
     dispatch_async(dispatch_get_main_queue(), ^{
         CGSize s = art.bounds.size; CGFloat side = LGClamp(MIN(s.width, s.height), 64, 300);
         UIImage *img = [art imageWithSize:CGSizeMake(side, side)];
-        NSLog(@"[LG] LGIngestNowPlayingInfo imageWithSize(%.0f,%.0f) -> %@", side, side, img ? @"YES" : @"NO");
+        NSLog(@"[LG] MPArtwork imageWithSize(%.0f,%.0f) -> %@", side, side, img ? @"YES" : @"NO");
         if (img) [LGTheme.shared ingestArtwork:img trackKey:ta];
     });
+}
+
+NSUInteger LGNowPlayingHookCount(void) { return sHookFires; }
+
+id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode)) {
+    if (!apply) return nil;
+    void (^run)(void) = ^{ LGTheme *t = LGTheme.shared; apply(t.palette, t.dark, t.staticMode); };
+    run();
+    return [NSNotificationCenter.defaultCenter addObserverForName:LGPaletteDidChangeNotification object:nil
+                                                           queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n) { run(); }];
 }
 
 #pragma mark - LGBackgroundView
@@ -296,6 +324,7 @@ void LGIngestNowPlayingInfo(NSDictionary *info) {
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
         self.userInteractionEnabled = NO; self.tag = kLGBgTag; _darkStyle = YES;
+        self.clipsToBounds = YES;          // blobs must never spill over neighbouring views (e.g. album art)
         _base = [CAGradientLayer layer]; _base.startPoint = CGPointMake(.41, 0); _base.endPoint = CGPointMake(.59, 1);   // ~170deg
         CAGradientLayer *ls[3];
         for (int i = 0; i < 3; i++) { ls[i] = [CAGradientLayer layer]; ls[i].type = kCAGradientLayerRadial; ls[i].startPoint = CGPointMake(.5, .5); ls[i].endPoint = CGPointMake(1, 1); }
@@ -312,29 +341,23 @@ void LGIngestNowPlayingInfo(NSDictionary *info) {
 - (NSArray *)blobColors:(UIColor *)c { if (!c) c = [UIColor clearColor]; return @[(id)c.CGColor, (id)c.CGColor, (id)[c colorWithAlphaComponent:.5].CGColor, (id)[c colorWithAlphaComponent:0].CGColor]; }
 - (void)applyPalette:(LGPalette *)p animated:(BOOL)animated {
     if (!p) return;
-    NSString *oldHex = LGColorHex(_pal.a1);
     _pal = p;
     NSTimeInterval dur = LGTheme.shared.fadeDuration;
-    BOOL reduceMotion = UIAccessibilityIsReduceMotionEnabled();
-    if (reduceMotion || dur <= 0) animated = NO;
+    if (UIAccessibilityIsReduceMotionEnabled() || dur <= 0) animated = NO;
     _blobA.opacity = _darkStyle ? .75 : .5; _blobB.opacity = _darkStyle ? .55 : .5;
     _blobA.hidden = _blobB.hidden = _staticMode; _glow.hidden = !_staticMode;
     NSArray *baseC = _staticMode ? @[(id)p.b1.CGColor, (id)p.b1.CGColor] : @[(id)p.b1.CGColor, (id)p.b2.CGColor];
     NSArray *glowC = @[(id)[p.a1 colorWithAlphaComponent:_darkStyle ? .502 : .302].CGColor, (id)[p.a1 colorWithAlphaComponent:0].CGColor];
-    __block BOOL didAddAnim = NO;
     void (^set)(CAGradientLayer *, NSArray *) = ^(CAGradientLayer *l, NSArray *c) {
         if (animated) {
             CABasicAnimation *an = [CABasicAnimation animationWithKeyPath:@"colors"];
             an.fromValue = ((CAGradientLayer *)(l.presentationLayer ?: l)).colors; an.toValue = c; an.duration = dur;
             an.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [l addAnimation:an forKey:@"lgcolors"];
-            didAddAnim = YES;
         }
         l.colors = c;
     };
     set(_base, baseC); set(_blobA, [self blobColors:p.a1]); set(_blobB, [self blobColors:p.a2]); set(_glow, glowC);
-    NSLog(@"[LG] applyPalette '%@' static=%d dark=%d animated=%d reduceMotion=%d oldA1=%@ newA1=%@ animAdded=%d",
-          p.name, _staticMode, _darkStyle, animated, reduceMotion, oldHex, LGColorHex(p.a1), didAddAnim);
     [self setNeedsLayout];
 }
 - (void)layoutSubviews {

@@ -1,8 +1,12 @@
-// LGHooks.x : MPNowPlayingInfoCenter ambient ingestion + safe Phase 2 runtime view hierarchy dumper.
+// LGHooks.x : MPNowPlayingInfoCenter hook + Step 1 ambient & audio discovery diagnostics + Phase 2 view dumper.
 // Zero unconfirmed YouTube class hooks. Nothing touches UIKit inside %ctor.
 #import "LiquidGlass.h"
+#import "AudioCrossfadeManager.h"
 #import <MediaPlayer/MediaPlayer.h>
+#import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
+
+static BOOL gMPClassExistedAtInstall = NO;
 
 @interface UIView (LGDebugPrivate)
 - (NSString *)recursiveDescription;
@@ -105,19 +109,87 @@ static void LGDumpHierarchyToFile(NSString *filename, UIWindow *preferredWin) {
         [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
         NSLog(@"[LG] Wrote discovery dump to %@", path);
     }
+}
 
-    // Also emit the compact key-views table to NSLog in 800-char chunks so syslog/Console captures it.
-    NSRange keyStart = [out rangeOfString:@"=== Key Views"];
-    NSRange recStart = [out rangeOfString:@"=== [window recursiveDescription]"];
-    if (keyStart.location != NSNotFound && recStart.location != NSNotFound && recStart.location > keyStart.location) {
-        NSString *summary = [out substringWithRange:NSMakeRange(0, recStart.location)];
-        NSUInteger len = summary.length, pos = 0;
-        while (pos < len) {
-            NSUInteger chunk = MIN(800, len - pos);
-            NSLog(@"[LG_DUMP] %@", [summary substringWithRange:NSMakeRange(pos, chunk)]);
-            pos += chunk;
+// Read-only runtime Audio & Now Playing probe (Audio Phase A: discovery only, zero hooks added).
+NSString *LGBuildDiagnosticReport(void) {
+    NSMutableString *out = [NSMutableString string];
+    [out appendString:@"=== AMBIENT & NOW PLAYING DIAGNOSTICS ===\n"];
+    [out appendFormat:@"MPNowPlayingInfoCenter existed at %%ctor: %@\n", gMPClassExistedAtInstall ? @"YES" : @"NO"];
+    [out appendFormat:@"MPNowPlayingInfoCenter setNowPlayingInfo fires: %lu\n", (unsigned long)LGNowPlayingHookCount()];
+    [out appendFormat:@"LGTheme.ambientStatus: %@\n", LGTheme.shared.ambientStatus];
+
+    NSDictionary *curInfo = [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo;
+    [out appendFormat:@"defaultCenter.nowPlayingInfo present: %@ (keys: %lu)\n",
+     curInfo ? @"YES" : @"NO", (unsigned long)curInfo.count];
+    if (curInfo) {
+        MPMediaItemArtwork *art = curInfo[MPMediaItemPropertyArtwork];
+        [out appendFormat:@"  Title: %@\n", curInfo[MPMediaItemPropertyTitle] ?: @"-"];
+        [out appendFormat:@"  Artist: %@\n", curInfo[MPMediaItemPropertyArtist] ?: @"-"];
+        [out appendFormat:@"  MPMediaItemPropertyArtwork: %@\n", art ? NSStringFromCGSize(art.bounds.size) : @"NO"];
+        [out appendFormat:@"  Elapsed: %@ | Duration: %@\n",
+         curInfo[MPMediaItemPropertyElapsedPlaybackTime] ?: @"-",
+         curInfo[MPMediaItemPropertyPlaybackDuration] ?: @"-"];
+    }
+
+    [out appendString:@"\n=== AUDIO PHASE A PROBE (READ-ONLY) ===\n"];
+    AudioCrossfadeManager *acm = [AudioCrossfadeManager sharedInstance];
+    [out appendFormat:@"Crossfade enabled: %d | duration: %.1fs | isCrossfading: %d | videoID: %@\n",
+     acm.crossfadeEnabled, acm.crossfadeDuration, acm.isCrossfading, [acm valueForKey:@"currentVideoID"] ?: @"-"];
+    id activeP = [acm valueForKey:@"activePlayer"];
+    id activeVC = [acm valueForKey:@"activePlayerVC"];
+    id npVC = [acm valueForKey:@"nowPlayingVC"];
+    [out appendFormat:@"activePlayer (AVPlayer): %@ | activePlayerVC: %@ | nowPlayingVC: %@\n",
+     activeP ? NSStringFromClass([activeP class]) : @"nil",
+     activeVC ? NSStringFromClass([activeVC class]) : @"nil",
+     npVC ? NSStringFromClass([npVC class]) : @"nil"];
+
+    AVAudioSession *sess = [AVAudioSession sharedInstance];
+    [out appendFormat:@"AVAudioSession category=%@ mode=%@ sampleRate=%.0f outputVolume=%.2f\n",
+     sess.category, sess.mode, sess.sampleRate, sess.outputVolume];
+
+    [out appendString:@"\n--- Runtime Audio/Queue Classes ---\n"];
+    unsigned int clsCount = 0;
+    Class *classes = objc_copyClassList(&clsCount);
+    NSMutableArray *hits = [NSMutableArray array];
+    for (unsigned int i = 0; i < clsCount; i++) {
+        const char *cname = class_getName(classes[i]);
+        NSString *s = [NSString stringWithUTF8String:cname];
+        if ([s containsString:@"HAMAudio"] || [s containsString:@"HAMPlayer"] ||
+            [s containsString:@"HAMQueue"] || [s containsString:@"YTMQueue"] ||
+            [s isEqualToString:@"YTPlayerViewController"] || [s isEqualToString:@"AVAudioEngine"]) {
+            unsigned int mc = 0;
+            Method *ms = class_copyMethodList(classes[i], &mc);
+            NSMutableArray *interestingSel = [NSMutableArray array];
+            for (unsigned int m = 0; m < mc; m++) {
+                NSString *sel = NSStringFromSelector(method_getName(ms[m]));
+                if ([sel localizedCaseInsensitiveContainsString:@"volume"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"gain"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"next"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"advance"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"player"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"audio"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"render"]) {
+                    [interestingSel addObject:sel];
+                    if (interestingSel.count >= 8) break;
+                }
+            }
+            if (ms) free(ms);
+            [hits addObject:[NSString stringWithFormat:@"%@ [%@]", s, [interestingSel componentsJoinedByString:@", "]]];
         }
     }
+    if (classes) free(classes);
+    for (NSString *h in [hits sortedArrayUsingSelector:@selector(compare:)]) {
+        [out appendFormat:@"  %@\n", h];
+    }
+
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (docs) {
+        NSString *p = [docs stringByAppendingPathComponent:@"lg_audio_probe.txt"];
+        [out writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    NSLog(@"[LG_AUDIO_PROBE]\n%@", out);
+    return out;
 }
 
 %hook MPNowPlayingInfoCenter
@@ -145,6 +217,8 @@ static void LGDumpHierarchyToFile(NSString *filename, UIWindow *preferredWin) {
 %end
 
 %ctor {
+    gMPClassExistedAtInstall = (objc_getClass("MPNowPlayingInfoCenter") != Nil);
+    NSLog(@"[LG] LGHooks %%ctor: MPNowPlayingInfoCenter exists=%@", gMPClassExistedAtInstall ? @"YES" : @"NO");
     %init;
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil

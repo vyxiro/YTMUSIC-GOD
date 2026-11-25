@@ -181,17 +181,14 @@ static AmbientView *gBrowseAmbientView = nil;
 @end
 
 static char kLGViewObserverKey;
-static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIView *v)) {
+static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIView *v, LGPalette *p, BOOL dark, BOOL staticMode)) {
     if (!view || objc_getAssociatedObject(view, &kLGViewObserverKey)) return;
     LGObserverBox *box = [LGObserverBox new];
     __weak UIView *weakView = view;
-    box.token = [[NSNotificationCenter defaultCenter] addObserverForName:LGPaletteDidChangeNotification
-                                                                  object:nil
-                                                                   queue:[NSOperationQueue mainQueue]
-                                                              usingBlock:^(__unused NSNotification *note) {
+    box.token = LGObserveTheme(^(LGPalette *p, BOOL dark, BOOL staticMode) {
         UIView *strongView = weakView;
-        if (strongView && onChange) onChange(strongView);
-    }];
+        if (strongView && onChange) onChange(strongView, p, dark, staticMode);
+    });
     objc_setAssociatedObject(view, &kLGViewObserverKey, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
@@ -201,7 +198,7 @@ static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIVie
 %hook YTMActionRowView
 - (void)layoutSubviews {
     %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
     LGTheme *t = LGTheme.shared;
     self.backgroundColor = [UIColor clearColor];
     for (UIView *sub in self.subviews) {
@@ -266,8 +263,7 @@ static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIVie
 
 #pragma mark - Dynamic Theme Accent Hooks
 
-static void LGApplySliderPalette(UISlider *slider) {
-    LGPalette *p = LGTheme.shared.palette;
+static void LGApplySliderPalette(UISlider *slider, LGPalette *p) {
     if (p.a1) slider.minimumTrackTintColor = p.a1;
     if (p.tx) slider.thumbTintColor = p.tx;
 }
@@ -277,9 +273,8 @@ static void LGApplySliderPalette(UISlider *slider) {
 - (void)didMoveToWindow {
     %orig;
     if (self.window) {
-        LGApplySliderPalette(self);
-        LGRegisterViewForPaletteUpdates(self, ^(UIView *v) {
-            if ([v isKindOfClass:[UISlider class]]) LGApplySliderPalette((UISlider *)v);
+        LGRegisterViewForPaletteUpdates(self, ^(UIView *v, LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) {
+            if ([v isKindOfClass:[UISlider class]]) LGApplySliderPalette((UISlider *)v, p);
         });
     }
 }
@@ -290,7 +285,7 @@ static void LGApplySliderPalette(UISlider *slider) {
 
 - (void)layoutSubviews {
     %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
     if ([self respondsToSelector:@selector(navigationButton)]) {
         UIView *btn = (UIView *)[self performSelector:@selector(navigationButton)];
         if (btn && [btn respondsToSelector:@selector(isSelected)]) {
@@ -311,7 +306,7 @@ static void LGApplySliderPalette(UISlider *slider) {
 
 - (void)layoutSubviews {
     %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
     self.backgroundColor = [UIColor clearColor];
     self.layer.cornerRadius = 0.0f;
     self.layer.borderWidth = 0.0f;
