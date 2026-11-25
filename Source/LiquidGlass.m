@@ -2,6 +2,7 @@
 #import "LiquidGlass.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreImage/CoreImage.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -89,6 +90,47 @@ static BOOL LGImageIsBlack(UIImage *img) {
     uint8_t px[8 * 8 * 4] = {0}; if (!LGDrawSmall(img, 8, px)) return YES;
     double s = 0; for (int i = 0; i < 64; i++) s += MAX(px[i*4], MAX(px[i*4+1], px[i*4+2])) / 255.0;
     return (s / 64.0) < 0.03;
+}
+static UIImage *LGMakeBlurredArtwork(UIImage *img, BOOL dark) {
+    if (!img) return nil;
+    CGFloat side = 160.0;
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
+    fmt.scale = 1.0;
+    UIImage *small = [[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(side, side) format:fmt] imageWithActions:^(__unused UIGraphicsImageRendererContext *ctx) {
+        [img drawInRect:CGRectMake(0, 0, side, side)];
+    }];
+    if (!small.CGImage) return img;
+
+    static CIContext *sCtx = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sCtx = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}]; });
+
+    CIImage *ci = [CIImage imageWithCGImage:small.CGImage];
+    CGRect extent = ci.extent;
+
+    CIFilter *clamp = [CIFilter filterWithName:@"CIAffineClamp"];
+    [clamp setValue:ci forKey:kCIInputImageKey];
+    [clamp setValue:[NSValue valueWithCGAffineTransform:CGAffineTransformIdentity] forKey:kCIInputTransformKey];
+    CIImage *clamped = clamp.outputImage ?: ci;
+
+    CIFilter *blur = [CIFilter filterWithName:@"CIGaussianBlur"];
+    [blur setValue:clamped forKey:kCIInputImageKey];
+    [blur setValue:@(16.0) forKey:kCIInputRadiusKey];
+    CIImage *blurred = blur.outputImage ?: clamped;
+
+    CIFilter *color = [CIFilter filterWithName:@"CIColorControls"];
+    [color setValue:blurred forKey:kCIInputImageKey];
+    [color setValue:@(1.30) forKey:kCIInputSaturationKey];
+    [color setValue:@(dark ? -0.05 : 0.06) forKey:kCIInputBrightnessKey];
+    [color setValue:@(1.06) forKey:kCIInputContrastKey];
+    CIImage *outCI = [color.outputImage imageByCroppingToRect:extent];
+    if (!outCI) return small;
+
+    CGImageRef cg = [sCtx createCGImage:outCI fromRect:extent];
+    if (!cg) return small;
+    UIImage *res = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    return res;
 }
 
 #pragma mark - LGPalette
@@ -197,10 +239,13 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
 
 #pragma mark - LGTheme
 @implementation LGTheme {
-    LGPalette *_art; UIImage *_lastImage; NSString *_lastKey; BOOL _artDark;
+    LGPalette *_art; UIImage *_lastImage, *_blurredArt; NSString *_lastKey; BOOL _artDark;
     NSDate *_lastVideoApply; int _blackStreak; BOOL _videoUnsupported; NSString *_lastTrack;
 }
 + (LGTheme *)shared { static LGTheme *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [LGTheme new]; [t reloadSilently]; }); return t; }
+- (UIImage *)blurredArtwork {
+    @synchronized(self) { return _blurredArt; }
+}
 - (void)reloadSilently {
     @synchronized(self) {
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
@@ -212,6 +257,7 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
         _fadeDuration = LGClamp([d objectForKey:@"LG_fade"] ? [d doubleForKey:@"LG_fade"] : 1.8, 0, 4);
         if (_ambient && _lastImage && (!_art || _artDark != _dark)) {       // dark/light toggled: recompute (about 1 ms)
             LGPalette *p = [LGPalette paletteFromImage:_lastImage dark:_dark]; if (p) { _art = p; _artDark = _dark; }
+            _blurredArt = LGMakeBlurredArtwork(_lastImage, _dark);
         }
         LGPalette *base = styleStatic ? [LGPalette staticNamed:([d stringForKey:@"LG_static_theme"] ?: @"Cherry Red") dark:_dark]
                                       : [LGPalette presetNamed:([d stringForKey:@"LG_theme"] ?: @"Aurora Teal") dark:_dark];
@@ -241,11 +287,12 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
         }
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             LGPalette *p = [LGPalette paletteFromImage:image dark:dark];
+            UIImage *blurred = LGMakeBlurredArtwork(image, dark);
             NSLog(@"[LG] ingestArtwork extracted a1=%@ b1=%@ dark=%d key='%@'", LGHexString(p.a1), LGHexString(p.b1), dark, trackKey ?: @"");
             dispatch_async(dispatch_get_main_queue(), ^{
                 @synchronized(self) {
                     if (!p || ![key isEqualToString:self->_lastKey]) return;
-                    self->_art = p; self->_artDark = dark;
+                    self->_art = p; self->_artDark = dark; self->_blurredArt = blurred;
                 }
                 [self reload];
             });
@@ -319,35 +366,94 @@ id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode))
                                                            queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n) { run(); }];
 }
 
-#pragma mark - LGBackgroundView
-@implementation LGBackgroundView { CAGradientLayer *_base, *_blobA, *_blobB, *_glow; LGPalette *_pal; }
+#pragma mark - LGBackgroundView (Full-Bleed Blurred Artwork & Atmospheric Wash — Zero Bulbs)
+@implementation LGBackgroundView {
+    CAGradientLayer *_base, *_scrim, *_glow;
+    UIImageView *_artView;
+    LGPalette *_pal;
+    UIImage *_appliedArt;
+}
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
-        self.userInteractionEnabled = NO; self.tag = kLGBgTag; _darkStyle = YES;
-        self.clipsToBounds = YES;          // blobs must never spill over neighbouring views (e.g. album art)
-        _base = [CAGradientLayer layer]; _base.startPoint = CGPointMake(.41, 0); _base.endPoint = CGPointMake(.59, 1);   // ~170deg
-        CAGradientLayer *ls[3];
-        for (int i = 0; i < 3; i++) { ls[i] = [CAGradientLayer layer]; ls[i].type = kCAGradientLayerRadial; ls[i].startPoint = CGPointMake(.5, .5); ls[i].endPoint = CGPointMake(1, 1); }
-        _blobA = ls[0]; _blobB = ls[1]; _glow = ls[2];
-        _glow.locations = @[@0, @.72];                       // sheet: ellipse 95% 48%, transparent at 72%
-        for (CALayer *l in @[_base, _blobA, _blobB, _glow]) [self.layer addSublayer:l];
+        self.userInteractionEnabled = NO; self.tag = kLGBgTag; _darkStyle = YES; _scrimMultiplier = 1.0f;
+        self.clipsToBounds = YES;
+
+        _base = [CAGradientLayer layer];
+        _base.startPoint = CGPointMake(0.15, 0.0);
+        _base.endPoint = CGPointMake(0.85, 1.0);
+        [self.layer addSublayer:_base];
+
+        _artView = [[UIImageView alloc] initWithFrame:f];
+        _artView.contentMode = UIViewContentModeScaleAspectFill;
+        _artView.clipsToBounds = YES;
+        _artView.alpha = 0.0f;
+        [self addSubview:_artView];
+
+        _scrim = [CAGradientLayer layer];
+        _scrim.startPoint = CGPointMake(0.5, 0.0);
+        _scrim.endPoint = CGPointMake(0.5, 1.0);
+        _scrim.locations = @[@0.0, @0.38, @0.72, @1.0];
+        [self.layer addSublayer:_scrim];
+
+        _glow = [CAGradientLayer layer];
+        _glow.type = kCAGradientLayerRadial;
+        _glow.startPoint = CGPointMake(0.5, 0.5);
+        _glow.endPoint = CGPointMake(1.0, 1.0);
+        _glow.locations = @[@0.0, @0.72];
+        [self.layer addSublayer:_glow];
+
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(themeChanged) name:LGPaletteDidChangeNotification object:nil];
         [self themeChanged];
     }
     return self;
 }
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)setScrimMultiplier:(CGFloat)m {
+    _scrimMultiplier = m > 0 ? m : 1.0f;
+    [self applyPalette:_pal ?: LGTheme.shared.palette animated:NO];
+}
 - (void)themeChanged { LGTheme *t = LGTheme.shared; _darkStyle = t.dark; _staticMode = t.staticMode; [self applyPalette:t.palette animated:YES]; }
-- (NSArray *)blobColors:(UIColor *)c { if (!c) c = [UIColor clearColor]; return @[(id)c.CGColor, (id)c.CGColor, (id)[c colorWithAlphaComponent:.5].CGColor, (id)[c colorWithAlphaComponent:0].CGColor]; }
 - (void)applyPalette:(LGPalette *)p animated:(BOOL)animated {
     if (!p) return;
     _pal = p;
-    NSTimeInterval dur = LGTheme.shared.fadeDuration;
+    LGTheme *t = LGTheme.shared;
+    NSTimeInterval dur = t.fadeDuration;
     if (UIAccessibilityIsReduceMotionEnabled() || dur <= 0) animated = NO;
-    _blobA.opacity = _darkStyle ? .75 : .5; _blobB.opacity = _darkStyle ? .55 : .5;
-    _blobA.hidden = _blobB.hidden = _staticMode; _glow.hidden = !_staticMode;
-    NSArray *baseC = _staticMode ? @[(id)p.b1.CGColor, (id)p.b1.CGColor] : @[(id)p.b1.CGColor, (id)p.b2.CGColor];
-    NSArray *glowC = @[(id)[p.a1 colorWithAlphaComponent:_darkStyle ? .502 : .302].CGColor, (id)[p.a1 colorWithAlphaComponent:0].CGColor];
+
+    UIImage *art = (!_staticMode && t.ambient) ? t.blurredArtwork : nil;
+    _glow.hidden = !_staticMode;
+    _scrim.hidden = _staticMode;
+
+    NSArray *baseC;
+    if (_staticMode) {
+        baseC = @[(id)p.b1.CGColor, (id)p.b1.CGColor];
+    } else {
+        UIColor *topTint = LGMix(p.b1, p.a1 ?: p.b2, _darkStyle ? 0.24 : 0.16);
+        UIColor *midTint = LGMix(p.b2, p.a2 ?: p.a1, _darkStyle ? 0.22 : 0.14);
+        UIColor *botTint = LGMix(p.b1, p.b2, 0.45);
+        baseC = @[(id)topTint.CGColor, (id)midTint.CGColor, (id)botTint.CGColor];
+        _base.locations = @[@0.0, @0.48, @1.0];
+    }
+
+    CGFloat m = _scrimMultiplier > 0 ? _scrimMultiplier : 1.0f;
+    NSArray *scrimC;
+    if (_darkStyle) {
+        scrimC = @[
+            (id)[UIColor colorWithWhite:0.0 alpha:LGClamp(0.26 * m, 0.0, 0.72)].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:LGClamp(0.14 * m, 0.0, 0.60)].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:LGClamp(0.28 * m, 0.0, 0.72)].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:LGClamp(0.42 * m, 0.0, 0.80)].CGColor
+        ];
+    } else {
+        scrimC = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:LGClamp(0.24 * m, 0.0, 0.65)].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:LGClamp(0.14 * m, 0.0, 0.55)].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:LGClamp(0.26 * m, 0.0, 0.65)].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:LGClamp(0.36 * m, 0.0, 0.72)].CGColor
+        ];
+    }
+    NSArray *glowC = @[(id)[p.a1 colorWithAlphaComponent:_darkStyle ? .45 : .28].CGColor, (id)[p.a1 colorWithAlphaComponent:0].CGColor];
+
     void (^set)(CAGradientLayer *, NSArray *) = ^(CAGradientLayer *l, NSArray *c) {
         if (animated) {
             CABasicAnimation *an = [CABasicAnimation animationWithKeyPath:@"colors"];
@@ -357,7 +463,24 @@ id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode))
         }
         l.colors = c;
     };
-    set(_base, baseC); set(_blobA, [self blobColors:p.a1]); set(_blobB, [self blobColors:p.a2]); set(_glow, glowC);
+    set(_base, baseC);
+    set(_scrim, scrimC);
+    set(_glow, glowC);
+
+    if (art != _appliedArt) {
+        _appliedArt = art;
+        void (^swap)(void) = ^{
+            self->_artView.image = art;
+            self->_artView.alpha = art ? (self->_scrimMultiplier > 1.15f ? 0.78f : 0.96f) : 0.0f;
+        };
+        if (animated && dur > 0.05) {
+            [UIView transitionWithView:_artView duration:dur options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction animations:swap completion:nil];
+        } else {
+            swap();
+        }
+    } else if (_artView.image) {
+        _artView.alpha = (_staticMode || !t.ambient) ? 0.0f : (_scrimMultiplier > 1.15f ? 0.78f : 0.96f);
+    }
     [self setNeedsLayout];
 }
 - (void)layoutSubviews {
@@ -365,27 +488,49 @@ id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode))
     CGFloat W = self.bounds.size.width, H = self.bounds.size.height; if (W < 1 || H < 1) return;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _base.frame = self.bounds;
-    CAGradientLayer *layers[2] = { _blobA, _blobB };
-    CGFloat R[2] = { .377 * W, .342 * W }, CX[2] = { .838 * W, .090 * W }, CY[2] = { .110 * H, .604 * H };
-    for (int i = 0; i < 2; i++) {
-        CGFloat ext = R[i] + 46;
-        layers[i].frame = CGRectMake(CX[i] - ext, CY[i] - ext, ext * 2, ext * 2);
-        layers[i].locations = @[@0, @(MAX(.1, (R[i] - 30) / ext)), @(R[i] / ext), @1];
-    }
-    _glow.frame = CGRectMake(W / 2 - .95 * W, H / 2 - .48 * H, 1.9 * W, .96 * H);   // radii = 95% W, 48% H
+    _artView.frame = CGRectInset(self.bounds, -12.0f, -12.0f);
+    _scrim.frame = self.bounds;
+    _glow.frame = CGRectMake(W / 2 - .95 * W, H / 2 - .48 * H, 1.9 * W, .96 * H);
     [CATransaction commit];
 }
 @end
 
-#pragma mark - LGGlassView
-@implementation LGGlassView { UIView *_clip, *_tint; UIVisualEffectView *_blur; CALayer *_hl; }
+#pragma mark - LGGlassView (iOS 26 Specular Liquid Glass)
+@implementation LGGlassView {
+    UIView *_clip, *_tint;
+    UIVisualEffectView *_blur;
+    CAGradientLayer *_gloss, *_specBorder;
+    CAShapeLayer *_specMask;
+}
 - (instancetype)initWithRadius:(CGFloat)radius dark:(BOOL)dark {
     if ((self = [super initWithFrame:CGRectZero])) {
         _radius = radius; _darkStyle = dark; self.tag = kLGGlassTag; self.userInteractionEnabled = NO;
-        _clip = [UIView new]; _clip.clipsToBounds = YES; _clip.layer.borderWidth = 1;
-        _blur = [UIVisualEffectView new]; _tint = [UIView new]; _hl = [CALayer layer];
-        [_clip addSubview:_blur]; [_clip addSubview:_tint]; [_clip.layer addSublayer:_hl]; [self addSubview:_clip];
-        self.layer.shadowOffset = CGSizeMake(0, 8); self.layer.shadowRadius = 12;
+        _clip = [UIView new]; _clip.clipsToBounds = YES;
+        _blur = [UIVisualEffectView new];
+        _tint = [UIView new];
+
+        _gloss = [CAGradientLayer layer];
+        _gloss.startPoint = CGPointMake(0.5, 0.0);
+        _gloss.endPoint = CGPointMake(0.5, 1.0);
+        _gloss.locations = @[@0.0, @0.35, @1.0];
+
+        _specBorder = [CAGradientLayer layer];
+        _specBorder.startPoint = CGPointMake(0.0, 0.0);
+        _specBorder.endPoint = CGPointMake(1.0, 1.0);
+        _specBorder.locations = @[@0.0, @0.32, @0.68, @1.0];
+        _specMask = [CAShapeLayer layer];
+        _specMask.fillColor = UIColor.clearColor.CGColor;
+        _specMask.strokeColor = UIColor.whiteColor.CGColor;
+        _specMask.lineWidth = 1.25;
+        _specBorder.mask = _specMask;
+
+        [_clip addSubview:_blur];
+        [_clip addSubview:_tint];
+        [_clip.layer addSublayer:_gloss];
+        [_clip.layer addSublayer:_specBorder];
+        [self addSubview:_clip];
+
+        self.layer.shadowOffset = CGSizeMake(0, 8); self.layer.shadowRadius = 14;
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(themeChanged) name:LGPaletteDidChangeNotification object:nil];
         [self refresh];
     }
@@ -395,25 +540,57 @@ id LGObserveTheme(void (^apply)(LGPalette *palette, BOOL dark, BOOL staticMode))
 - (void)themeChanged { LGTheme *t = LGTheme.shared; _darkStyle = t.dark; _staticMode = t.staticMode; _staticFill = t.palette.b2; [self refresh]; }
 - (void)setRadius:(CGFloat)r { _radius = r; [self setNeedsLayout]; }
 - (void)refresh {
-    CGFloat fill = _darkStyle ? .09 : .55, border = _darkStyle ? .2 : .8, hl = _darkStyle ? .28 : .95;   // TUNE: material adds grey
     if (_staticMode) {
-        _blur.effect = nil; _blur.hidden = YES; _tint.backgroundColor = _staticFill ?: [UIColor colorWithWhite:.12 alpha:1];
-        _clip.layer.borderColor = [UIColor colorWithWhite:.5 alpha:.35].CGColor; _hl.hidden = YES; self.layer.shadowOpacity = 0;
+        _blur.effect = nil; _blur.hidden = YES;
+        _gloss.hidden = YES; _specBorder.hidden = YES;
+        _tint.backgroundColor = _staticFill ?: [UIColor colorWithWhite:.12 alpha:1];
+        _clip.layer.borderWidth = 1.0f;
+        _clip.layer.borderColor = [UIColor colorWithWhite:.5 alpha:.35].CGColor;
+        self.layer.shadowOpacity = 0;
     } else {
         _blur.hidden = NO;
         _blur.effect = [UIBlurEffect effectWithStyle:_darkStyle ? UIBlurEffectStyleSystemUltraThinMaterialDark : UIBlurEffectStyleSystemUltraThinMaterialLight];
-        _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:fill]; _clip.layer.borderColor = [UIColor colorWithWhite:1 alpha:border].CGColor;
-        _hl.backgroundColor = [UIColor colorWithWhite:1 alpha:hl].CGColor; _hl.hidden = NO;
-        self.layer.shadowColor = UIColor.blackColor.CGColor; self.layer.shadowOpacity = .35;
+        _blur.alpha = _darkStyle ? 0.88f : 0.92f;
+        _tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:(_darkStyle ? 0.045 : 0.36)];
+        _clip.layer.borderWidth = 0.0f;
+
+        _gloss.hidden = NO;
+        _gloss.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:(_darkStyle ? 0.13 : 0.42)].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:(_darkStyle ? 0.03 : 0.10)].CGColor,
+            (id)UIColor.clearColor.CGColor
+        ];
+
+        _specBorder.hidden = NO;
+        _specBorder.colors = _darkStyle ? @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.50].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.08].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.32].CGColor
+        ] : @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.92].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.45].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.28].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.75].CGColor
+        ];
+
+        self.layer.shadowColor = UIColor.blackColor.CGColor;
+        self.layer.shadowOpacity = _darkStyle ? 0.32f : 0.16f;
     }
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
     if (b.size.width <= 0 || b.size.height <= 0) return;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
     _clip.frame = b; _blur.frame = b; _tint.frame = b;
-    _clip.layer.cornerRadius = MIN(_radius, MIN(b.size.width, b.size.height) / 2); CGFloat r = _clip.layer.cornerRadius;
-    _hl.frame = CGRectMake(r * .6, 0, MAX(0, b.size.width - r * 1.2), 1);
+    CGFloat r = MIN(_radius, MIN(b.size.width, b.size.height) / 2);
+    _clip.layer.cornerRadius = r;
+    _gloss.frame = CGRectMake(0, 0, b.size.width, MIN(b.size.height, MAX(24.0f, b.size.height * 0.45f)));
+    _specBorder.frame = b;
+    _specMask.frame = b;
+    _specMask.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(b, 0.6f, 0.6f) cornerRadius:MAX(0, r - 0.6f)].CGPath;
+    [CATransaction commit];
     CGRect sp = CGRectInset(b, 12, 12);
     if (sp.size.width > 0 && sp.size.height > 0) self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:sp cornerRadius:MAX(0, r - 12)].CGPath;
     else self.layer.shadowPath = nil;

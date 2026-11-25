@@ -27,7 +27,8 @@ extern NSString *const LGPaletteDidChangeNotification;
 
 @interface LGBackgroundView : UIView
 @property (nonatomic) BOOL darkStyle;
-@property (nonatomic) BOOL staticMode;    // flat bg + one soft ellipse glow, no blobs
+@property (nonatomic) BOOL staticMode;    // flat bg + one soft ellipse glow, no blur/artwork
+@property (nonatomic) CGFloat scrimMultiplier; // 1.0 = Now Playing rich, 1.35 = Home legible
 - (void)applyPalette:(LGPalette *)p animated:(BOOL)animated;
 @end
 
@@ -42,6 +43,7 @@ extern NSString *const LGPaletteDidChangeNotification;
 @interface LGTheme : NSObject
 @property (class, readonly) LGTheme *shared;
 @property (nonatomic, strong, readonly) LGPalette *palette;
+@property (nonatomic, strong, readonly) UIImage *blurredArtwork;
 @property (nonatomic, readonly) BOOL dark, staticMode, ambient;
 @property (nonatomic, readonly) NSTimeInterval fadeDuration;
 - (void)reload;                                                   // re-read prefs, post notification

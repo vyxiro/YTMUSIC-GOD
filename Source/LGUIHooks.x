@@ -163,11 +163,14 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
     }
     if (staticMode) {
         btn.layer.shadowOpacity = 0.0f;
+        btn.layer.borderWidth = 0.0f;
     } else if (p.a1) {
+        btn.layer.borderWidth = 1.0f;
+        btn.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.42f].CGColor;
         btn.layer.shadowColor = p.a1.CGColor;
         btn.layer.shadowOffset = CGSizeMake(0, 4);
-        btn.layer.shadowRadius = 12.0f;
-        btn.layer.shadowOpacity = 0.48f;
+        btn.layer.shadowRadius = 14.0f;
+        btn.layer.shadowOpacity = 0.55f;
     }
 }
 
@@ -179,7 +182,8 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
 - (void)viewDidLoad {
     %orig;
     self.view.backgroundColor = [UIColor clearColor];
-    LGInstallBackground(self.view);
+    LGBackgroundView *bg = LGInstallBackground(self.view);
+    if (bg) bg.scrimMultiplier = 1.35f;
 }
 
 - (void)viewDidLayoutSubviews {
@@ -187,6 +191,7 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
     self.view.backgroundColor = [UIColor clearColor];
     LGBackgroundView *bg = LGInstallBackground(self.view);
     if (bg) {
+        bg.scrimMultiplier = 1.35f;
         bg.frame = self.view.bounds;
         [self.view sendSubviewToBack:bg];
     }
@@ -319,6 +324,39 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
         [self sendSubviewToBack:card];
     }
 
+    // Style ELM action pills (Like, Dislike, Lyrics, Comments, Save) inside YTMNowPlayingView
+    LGTheme *t = LGTheme.shared;
+    for (UIView *sub in self.subviews) {
+        NSString *cls = NSStringFromClass([sub class]);
+        if ([cls containsString:@"YTELMView"] || [sub isKindOfClass:[UIScrollView class]]) {
+            for (UIView *inner in sub.subviews) {
+                if ([inner isKindOfClass:[UICollectionView class]]) {
+                    inner.backgroundColor = [UIColor clearColor];
+                    for (UIView *cell in inner.subviews) {
+                        for (UIView *target in @[cell, cell.subviews.firstObject ?: cell]) {
+                            CGSize cs = target.bounds.size;
+                            if (cs.height >= 26.0f && cs.height <= 44.0f && cs.width >= 30.0f && cs.width <= 260.0f &&
+                                (target == cell || target.layer.cornerRadius >= 10.0f)) {
+                                if (target != cell && cell.layer.borderWidth > 0) cell.layer.borderWidth = 0;
+                                target.layer.cornerRadius = cs.height * 0.5f;
+                                target.clipsToBounds = YES;
+                                if (t.staticMode) {
+                                    target.backgroundColor = t.palette.b2;
+                                    target.layer.borderWidth = 1.0f;
+                                    target.layer.borderColor = [UIColor colorWithWhite:0.5f alpha:0.35f].CGColor;
+                                } else {
+                                    target.backgroundColor = [UIColor colorWithWhite:(t.dark ? 1.0f : 0.0f) alpha:(t.dark ? 0.08f : 0.06f)];
+                                    target.layer.borderWidth = 0.85f;
+                                    target.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.28f : 0.70f)].CGColor;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     UIView *cur = self.superview;
     Class watchCls = objc_getClass("YTMWatchView");
     while (cur && watchCls && ![cur isKindOfClass:watchCls]) {
@@ -406,7 +444,7 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
 %end
 
 %group PlayerCarouselHooks
-static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor) {
+static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor, BOOL isStatic) {
     for (UIView *sub in root.subviews) {
         if (LGIsVideoViewOrContainer(sub)) continue;
         NSString *cls = NSStringFromClass([sub class]);
@@ -414,10 +452,17 @@ static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor) {
             sub.bounds.size.width >= 160.0f && sub.bounds.size.height >= 160.0f) {
             sub.layer.cornerRadius = 26.0f;
             sub.clipsToBounds = YES;
-            sub.layer.borderWidth = 1.0f;
+            sub.layer.borderWidth = 1.15f;
             sub.layer.borderColor = borderColor.CGColor;
+            if (sub.superview && !isStatic) {
+                sub.superview.clipsToBounds = NO;
+                sub.superview.layer.shadowColor = UIColor.blackColor.CGColor;
+                sub.superview.layer.shadowOffset = CGSizeMake(0, 10);
+                sub.superview.layer.shadowRadius = 24.0f;
+                sub.superview.layer.shadowOpacity = 0.45f;
+            }
         } else if (sub.subviews.count > 0 && sub.bounds.size.width >= 160.0f) {
-            LGRoundLargeArtworkInTree(sub, borderColor);
+            LGRoundLargeArtworkInTree(sub, borderColor, isStatic);
         }
     }
 }
@@ -439,8 +484,8 @@ static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor) {
     BOOL isDark = LGTheme.shared.dark;
     UIColor *borderColor = isStatic
         ? [UIColor colorWithWhite:0.5f alpha:0.35f]
-        : [UIColor colorWithWhite:1.0f alpha:(isDark ? 0.25f : 0.72f)];
-    LGRoundLargeArtworkInTree(self, borderColor);
+        : [UIColor colorWithWhite:1.0f alpha:(isDark ? 0.36f : 0.78f)];
+    LGRoundLargeArtworkInTree(self, borderColor, isStatic);
 }
 
 %end
@@ -466,10 +511,13 @@ static void LGColorScrubber(UIView *scrubber, LGPalette *p, BOOL dark) {
                 bars.lastObject.backgroundColor = a1;
             }
         } else if (s.width >= 8.0f && s.width <= 20.0f && fabs(s.width - s.height) < 2.0f && sub.subviews.count == 0) {
-            // Circular scrubber thumb
+            // Circular scrubber thumb (crisp glowing dot like target screenshots)
             sub.backgroundColor = dark ? UIColor.whiteColor : (p.tx ?: UIColor.blackColor);
-            sub.layer.borderWidth = 1.5f;
-            sub.layer.borderColor = a1.CGColor;
+            sub.layer.borderWidth = 0.0f;
+            sub.layer.shadowColor = UIColor.whiteColor.CGColor;
+            sub.layer.shadowOffset = CGSizeZero;
+            sub.layer.shadowRadius = 4.0f;
+            sub.layer.shadowOpacity = dark ? 0.65f : 0.25f;
         }
     }
 }
@@ -760,9 +808,9 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
                     pill.backgroundColor = [p.a1 ?: UIColor.whiteColor colorWithAlphaComponent:0.18f];
                     pill.layer.borderWidth = 0.0f;
                 } else {
-                    pill.backgroundColor = [UIColor colorWithWhite:(t.dark ? 1.0f : 0.0f) alpha:(t.dark ? 0.16f : 0.10f)];
-                    pill.layer.borderWidth = 0.75f;
-                    pill.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.28f : 0.65f)].CGColor;
+                    pill.backgroundColor = [UIColor colorWithWhite:(t.dark ? 1.0f : 0.0f) alpha:(t.dark ? 0.21f : 0.12f)];
+                    pill.layer.borderWidth = 0.9f;
+                    pill.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.40f : 0.75f)].CGColor;
                 }
             } else {
                 pill.hidden = YES;
