@@ -286,7 +286,7 @@ void LGIngestNowPlayingInfo(NSDictionary *info) {
     sHookFires++;
     MPMediaItemArtwork *art = info[MPMediaItemPropertyArtwork];
     NSString *title = info[MPMediaItemPropertyTitle] ?: @"", *artist = info[MPMediaItemPropertyArtist] ?: @"";
-    NSNumber *elapsed = info[MPMediaItemPropertyElapsedPlaybackTime];
+    NSNumber *elapsed = info[MPNowPlayingInfoPropertyElapsedPlaybackTime];
     NSNumber *dur = info[MPMediaItemPropertyPlaybackDuration];
     NSLog(@"[LG] MPNowPlayingInfoCenter fire #%lu: title='%@' artist='%@' artwork=%@ elapsed=%@ dur=%@",
           (unsigned long)sHookFires, title, artist, art ? @"YES" : @"NO", elapsed ?: @"-", dur ?: @"-");

@@ -128,7 +128,7 @@ NSString *LGBuildDiagnosticReport(void) {
         [out appendFormat:@"  Artist: %@\n", curInfo[MPMediaItemPropertyArtist] ?: @"-"];
         [out appendFormat:@"  MPMediaItemPropertyArtwork: %@\n", art ? NSStringFromCGSize(art.bounds.size) : @"NO"];
         [out appendFormat:@"  Elapsed: %@ | Duration: %@\n",
-         curInfo[MPMediaItemPropertyElapsedPlaybackTime] ?: @"-",
+         curInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] ?: @"-",
          curInfo[MPMediaItemPropertyPlaybackDuration] ?: @"-"];
     }
 
