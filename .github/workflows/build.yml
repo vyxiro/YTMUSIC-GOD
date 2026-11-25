@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build-unified-tweak:
     name: Compile Unified YTMusicUltimate Dylib and Deb
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout Code
