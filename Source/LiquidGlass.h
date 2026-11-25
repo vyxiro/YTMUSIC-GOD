@@ -68,3 +68,4 @@ void LGIngestNowPlayingInfo(NSDictionary *info);
 
 LGBackgroundView *LGInstallBackground(UIView *host);
 LGGlassView *LGAttachGlass(UIView *host, CGFloat radius);
+LGGlassView *LGAttachGlass(UIView *host, CGFloat radius);

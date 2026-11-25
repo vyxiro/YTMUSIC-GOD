@@ -53,11 +53,16 @@ static BOOL isLowContrast() {
     return [UIColor clearColor];
 }
 
+- (UIColor *)halfExpandedTabsBackgroundColor {
+    return [UIColor clearColor];
+}
+
 - (UIColor *)miniPlayerColor {
-    if (LGTheme.shared.staticMode) {
-        return LGTheme.shared.palette.b2 ?: %orig;
-    }
-    return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
+    return [UIColor clearColor];
+}
+
+- (UIColor *)tabViewColor {
+    return [UIColor clearColor];
 }
 
 - (UIColor *)expandedTabViewColor {
@@ -71,11 +76,22 @@ static BOOL isLowContrast() {
     return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
 }
 
-- (UIColor *)AVSwitchBackgroundColor {
+- (UIColor *)overlayScrimColor {
+    return [UIColor clearColor];
+}
+
+- (UIColor *)AVSwitchBackgroundLightColor {
     if (LGTheme.shared.staticMode) {
         return LGTheme.shared.palette.b2 ?: %orig;
     }
-    return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
+    return [UIColor colorWithWhite:1.0f alpha:0.22f];
+}
+
+- (UIColor *)AVSwitchBackgroundDarkColor {
+    if (LGTheme.shared.staticMode) {
+        return LGTheme.shared.palette.b2 ?: %orig;
+    }
+    return [UIColor colorWithWhite:1.0f alpha:0.12f];
 }
 
 - (UIColor *)AVSwitchActiveModeColor {
@@ -86,7 +102,16 @@ static BOOL isLowContrast() {
     return [UIColor clearColor];
 }
 
+- (UIColor *)halfExpandedQueueBackgroundColor {
+    return [UIColor clearColor];
+}
+
 - (UIColor *)queueCurrentlyPlayingColor {
+    UIColor *a1 = LGTheme.shared.palette.a1;
+    return a1 ? [a1 colorWithAlphaComponent:0.25f] : %orig;
+}
+
+- (UIColor *)halfExpandedQueueCurrentlyPlayingColor {
     UIColor *a1 = LGTheme.shared.palette.a1;
     return a1 ? [a1 colorWithAlphaComponent:0.25f] : %orig;
 }
@@ -94,13 +119,25 @@ static BOOL isLowContrast() {
 - (BOOL)gradientBackgroundEnabled {
     return NO;
 }
-%end
 
-%hook YTPivotBarView
-- (UIView *)contentView {
-    UIView *orig = %orig;
-    orig.backgroundColor = [UIColor clearColor];
-    return orig;
+- (NSArray<UIColor *> *)gradientBackgroundColors {
+    return @[ [UIColor clearColor], [UIColor clearColor] ];
+}
+
+- (NSArray<UIColor *> *)playerTopScrimColors {
+    return @[ [UIColor clearColor], [UIColor clearColor] ];
+}
+
+- (NSArray<UIColor *> *)playerBottomScrimColors {
+    return @[ [UIColor clearColor], [UIColor clearColor] ];
+}
+
+- (NSArray<UIColor *> *)playerBottomScrimOpaqueColors {
+    return @[ [UIColor clearColor], [UIColor clearColor] ];
+}
+
+- (NSArray<UIColor *> *)miniPlayerScrimColors {
+    return @[ [UIColor clearColor], [UIColor clearColor] ];
 }
 %end
 

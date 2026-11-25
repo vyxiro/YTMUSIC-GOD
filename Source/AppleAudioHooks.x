@@ -7,8 +7,6 @@
 #import "LGCrossfade.h"
 #import "NetworkBufferOptimizer.h"
 #import "LiquidGlass.h"
-#import "ThemeManager.h"
-#import "AmbientView.h"
 #import <objc/runtime.h>
 #import "Headers/YTPlayerViewController.h"
 #import "Headers/YTPlayerResponse.h"
@@ -19,23 +17,12 @@
 #import "Headers/YTIThumbnailDetails.h"
 #import "Headers/YTIThumbnailDetails_Thumbnail.h"
 #import "Headers/YTMNowPlayingViewController.h"
-#import "Headers/YTMBrowseViewController.h"
 
 @interface YTPlaybackController : NSObject
 @end
 
-@interface YTPivotBarItemView : UIView
-- (id)navigationButton;
-@end
-
-@interface YTPivotBarView : UIView
-- (UIView *)contentView;
-@end
-
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 static __weak id gCurrentNowPlayingVC = nil;
-static AmbientView *gSharedAmbientView = nil;
-static AmbientView *gBrowseAmbientView = nil;
 
 static NSHashTable *gTrackedRenderers = nil;
 static NSHashTable *gTrackedHAMPlayers = nil;
@@ -235,34 +222,12 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
     gCurrentNowPlayingVC = self;
     self.view.backgroundColor = [UIColor clearColor];
     [[AudioCrossfadeManager sharedInstance] registerNowPlayingViewController:self];
-    if (!gSharedAmbientView) {
-        gSharedAmbientView = [[AmbientView alloc] initWithFrame:self.view.bounds];
-        gSharedAmbientView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [self.view insertSubview:gSharedAmbientView atIndex:0];
-    }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     gCurrentNowPlayingVC = self;
     [[AudioCrossfadeManager sharedInstance] registerNowPlayingViewController:self];
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    self.view.backgroundColor = [UIColor clearColor];
-    if (gSharedAmbientView) {
-        gSharedAmbientView.frame = self.view.bounds;
-        [self.view sendSubviewToBack:gSharedAmbientView];
-    }
-    for (UIView *subview in self.view.subviews) {
-        // Preserve video playback layers so Video mode is never broken
-        if (subview != gSharedAmbientView && ![subview isKindOfClass:%c(YTPlayerView)] && ![subview isKindOfClass:%c(HAMVideoView)]) {
-            if ([subview.backgroundColor isEqual:[UIColor blackColor]]) {
-                subview.backgroundColor = [UIColor clearColor];
-            }
-        }
-    }
 }
 
 - (void)didTapNextButton {
@@ -281,78 +246,6 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
         [[LGCrossfade shared] cancel];
     } @catch (NSException *e) {}
     %orig;
-}
-
-%end
-
-#pragma mark - Browse Liquid Glass Backdrop
-
-@interface LGObserverBox : NSObject
-@property (nonatomic, strong) id token;
-@end
-@implementation LGObserverBox
-- (void)dealloc {
-    if (_token) [[NSNotificationCenter defaultCenter] removeObserver:_token];
-}
-@end
-
-static char kLGViewObserverKey;
-static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIView *v, LGPalette *p, BOOL dark, BOOL staticMode)) {
-    if (!view || objc_getAssociatedObject(view, &kLGViewObserverKey)) return;
-    LGObserverBox *box = [LGObserverBox new];
-    __weak UIView *weakView = view;
-    box.token = LGObserveTheme(^(LGPalette *p, BOOL dark, BOOL staticMode) {
-        UIView *strongView = weakView;
-        if (strongView && onChange) onChange(strongView, p, dark, staticMode);
-    });
-    objc_setAssociatedObject(view, &kLGViewObserverKey, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-@interface YTMActionRowView : UIView
-@end
-
-%hook YTMActionRowView
-- (void)layoutSubviews {
-    %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
-    LGTheme *t = LGTheme.shared;
-    self.backgroundColor = [UIColor clearColor];
-    for (UIView *sub in self.subviews) {
-        sub.backgroundColor = [UIColor clearColor];
-        if ([sub isKindOfClass:[UIScrollView class]]) {
-            for (UIView *btn in sub.subviews) {
-                if ([btn isKindOfClass:[UIButton class]] || [btn isKindOfClass:%c(MDCButton)]) {
-                    if (t.staticMode) {
-                        btn.backgroundColor = t.palette.b2;
-                        btn.layer.borderWidth = 1.0f;
-                        btn.layer.borderColor = [UIColor colorWithWhite:0.5f alpha:0.35f].CGColor;
-                    } else {
-                        btn.backgroundColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.09f : 0.55f)];
-                        btn.layer.borderWidth = 1.0f;
-                        btn.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.20f : 0.80f)].CGColor;
-                    }
-                    btn.layer.cornerRadius = 18.0f;
-                    btn.clipsToBounds = YES;
-                }
-            }
-        }
-    }
-}
-%end
-
-%hook YTMBrowseViewController
-
-- (void)viewDidLoad {
-    %orig;
-    AmbientView *ambient = [[AmbientView alloc] initWithFrame:self.view.bounds];
-    ambient.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view insertSubview:ambient atIndex:0];
-    self.view.backgroundColor = [UIColor clearColor];
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    self.view.backgroundColor = [UIColor clearColor];
 }
 
 %end
@@ -481,64 +374,6 @@ static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIVie
         }
     }
     return ok;
-}
-
-%end
-
-#pragma mark - Dynamic Theme Accent Hooks
-
-static void LGApplySliderPalette(UISlider *slider, LGPalette *p) {
-    if (p.a1) slider.minimumTrackTintColor = p.a1;
-    if (p.tx) slider.thumbTintColor = p.tx;
-}
-
-%hook UISlider
-
-- (void)didMoveToWindow {
-    %orig;
-    if (self.window) {
-        LGRegisterViewForPaletteUpdates(self, ^(UIView *v, LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) {
-            if ([v isKindOfClass:[UISlider class]]) LGApplySliderPalette((UISlider *)v, p);
-        });
-    }
-}
-
-%end
-
-%hook YTPivotBarItemView
-
-- (void)layoutSubviews {
-    %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
-    if ([self respondsToSelector:@selector(navigationButton)]) {
-        UIView *btn = (UIView *)[self performSelector:@selector(navigationButton)];
-        if (btn && [btn respondsToSelector:@selector(isSelected)]) {
-            BOOL isSel = ((BOOL (*)(id, SEL))objc_msgSend)(btn, @selector(isSelected));
-            LGPalette *p = LGTheme.shared.palette;
-            if (isSel && p.a1) {
-                [btn setTintColor:p.a1];
-            } else if (!isSel && p.mu) {
-                [btn setTintColor:p.mu];
-            }
-        }
-    }
-}
-
-%end
-
-%hook YTPivotBarView
-
-- (void)layoutSubviews {
-    %orig;
-    LGRegisterViewForPaletteUpdates(self, ^(UIView *v, __unused LGPalette *p, __unused BOOL dark, __unused BOOL staticMode) { [v setNeedsLayout]; });
-    self.backgroundColor = [UIColor clearColor];
-    self.layer.cornerRadius = 0.0f;
-    self.layer.borderWidth = 0.0f;
-    self.layer.shadowOpacity = 0.0f;
-    if ([self respondsToSelector:@selector(contentView)]) {
-        UIView *cv = (UIView *)[self performSelector:@selector(contentView)];
-        if (cv) cv.backgroundColor = [UIColor clearColor];
-    }
 }
 
 %end

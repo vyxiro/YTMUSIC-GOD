@@ -441,15 +441,22 @@ static NSTimer *sTimer; static __weak UIView *sTarget;
 @end
 
 #pragma mark - helpers
+static UIView *LGFindDirectSubviewWithTag(UIView *host, NSInteger tag) {
+    for (UIView *sub in host.subviews) {
+        if (sub.tag == tag) return sub;
+    }
+    return nil;
+}
+
 LGBackgroundView *LGInstallBackground(UIView *host) {
     if (!host) return nil;
-    UIView *old = [host viewWithTag:kLGBgTag]; if ([old isKindOfClass:LGBackgroundView.class]) return (LGBackgroundView *)old;
+    UIView *old = LGFindDirectSubviewWithTag(host, kLGBgTag); if ([old isKindOfClass:LGBackgroundView.class]) return (LGBackgroundView *)old;
     LGBackgroundView *bg = [[LGBackgroundView alloc] initWithFrame:host.bounds];
     bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [host insertSubview:bg atIndex:0]; return bg;
 }
 LGGlassView *LGAttachGlass(UIView *host, CGFloat radius) {
     if (!host) return nil;
-    UIView *old = [host viewWithTag:kLGGlassTag];
+    UIView *old = LGFindDirectSubviewWithTag(host, kLGGlassTag);
     if ([old isKindOfClass:LGGlassView.class]) { ((LGGlassView *)old).radius = radius; return (LGGlassView *)old; }
     host.backgroundColor = UIColor.clearColor;
     LGGlassView *g = [[LGGlassView alloc] initWithRadius:radius dark:LGTheme.shared.dark]; g.frame = host.bounds;
