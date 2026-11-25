@@ -110,6 +110,23 @@ static BOOL LGAncestorHasLGBackground(UIView *v) {
     return NO;
 }
 
+static UIView *LGFindDescendantOfClass(UIView *root, Class cls, int depth) {
+    if (!root || !cls || depth > 10) return nil;
+    for (UIView *sub in root.subviews) {
+        if ([sub isKindOfClass:cls]) return sub;
+        if ([sub isKindOfClass:[LGBackgroundView class]] ||
+            [sub isKindOfClass:[LGGlassView class]] ||
+            [sub isKindOfClass:[UICollectionView class]]) {
+            continue;
+        }
+        NSString *name = NSStringFromClass([sub class]);
+        if ([name containsString:@"YTELMView"] || [name containsString:@"Scrubber"]) continue;
+        UIView *hit = LGFindDescendantOfClass(sub, cls, depth + 1);
+        if (hit) return hit;
+    }
+    return nil;
+}
+
 static void LGSyncWatchBackgroundAlpha(UIView *watchView, UIView *nowPlayingView) {
     if (!watchView) return;
     LGBackgroundView *bg = objc_getAssociatedObject(watchView, &kLGWatchBgKey);
@@ -123,45 +140,47 @@ static void LGSyncWatchBackgroundAlpha(UIView *watchView, UIView *nowPlayingView
     }
     if (!bg) return;
 
-    CGFloat watchH = watchView.bounds.size.height;
-    UIView *np = nowPlayingView;
-    Class npCls = objc_getClass("YTMNowPlayingView");
-    Class miniCls = objc_getClass("YTMMiniPlayerView");
-    Class tabCls = objc_getClass("YTMPlayerTabView");
-    UIView *mini = nil;
-    UIView *tab = nil;
-
-    for (UIView *sub in watchView.subviews) {
-        if (!np && npCls && [sub isKindOfClass:npCls]) np = sub;
-        if (!mini && miniCls && [sub isKindOfClass:miniCls]) mini = sub;
-        if (!tab && tabCls && [sub isKindOfClass:tabCls]) tab = sub;
-        for (UIView *sub2 in sub.subviews) {
-            if (!np && npCls && [sub2 isKindOfClass:npCls]) np = sub2;
-            if (!mini && miniCls && [sub2 isKindOfClass:miniCls]) mini = sub2;
-            if (!tab && tabCls && [sub2 isKindOfClass:tabCls]) tab = sub2;
-            for (UIView *sub3 in sub2.subviews) {
-                if (!np && npCls && [sub3 isKindOfClass:npCls]) np = sub3;
-            }
-        }
+    if (!CGRectIsEmpty(watchView.bounds) && !CGRectEqualToRect(bg.frame, watchView.bounds)) {
+        bg.frame = watchView.bounds;
     }
+    [watchView sendSubviewToBack:bg];
+
+    CGFloat watchH = watchView.bounds.size.height;
+    UIView *np = nowPlayingView ?: LGFindDescendantOfClass(watchView, objc_getClass("YTMNowPlayingView"), 0);
+    UIView *mini = LGFindDescendantOfClass(watchView, objc_getClass("YTMMiniPlayerView"), 0);
+    UIView *tab = LGFindDescendantOfClass(watchView, objc_getClass("YTMPlayerTabView"), 0);
+    UIView *carousel = LGFindDescendantOfClass(watchView, objc_getClass("YTMPlayerCarouselView"), 0);
 
     CGFloat targetAlpha = 0.0f;
-    if (np && !np.hidden) {
+    if (np && !np.hidden && np.alpha > 0.01f) {
         targetAlpha = MAX(targetAlpha, np.alpha);
     }
-    // Keep blurred background opaque when Queue / Lyrics / Related sheet is open (Mini Player docked at top or TabView expanded)
+
+    BOOL miniAtBottom = NO;
     if (mini && !mini.hidden && mini.alpha > 0.05f && watchH > 200.0f) {
         CGRect mf = [watchView convertRect:mini.bounds fromView:mini];
         if (mf.origin.y < watchH * 0.45f) {
+            // Mini player docked at top -> Queue / Lyrics / Related sheet is open
             targetAlpha = 1.0f;
+        } else if (mf.origin.y >= watchH * 0.55f && mf.origin.y < watchH - 20.0f && mini.alpha > 0.5f) {
+            miniAtBottom = YES;
         }
     }
+
+    if (carousel && !carousel.hidden && carousel.alpha > 0.05f && !miniAtBottom && watchH > 200.0f) {
+        CGRect cf = [watchView convertRect:carousel.bounds fromView:carousel];
+        if (CGRectGetMaxY(cf) > 100.0f && cf.origin.y < watchH - 120.0f) {
+            targetAlpha = MAX(targetAlpha, carousel.alpha);
+        }
+    }
+
     if (tab && !tab.hidden && tab.alpha > 0.05f && watchH > 200.0f) {
         CGRect tf = [watchView convertRect:tab.bounds fromView:tab];
         if (tf.size.height > 160.0f && tf.origin.y < watchH - 180.0f) {
             targetAlpha = 1.0f;
         }
     }
+
     bg.alpha = targetAlpha;
 }
 
@@ -492,6 +511,10 @@ static void LGUpdatePlayerControlsButtons(UIView *controls, LGPalette *p, BOOL s
             [sub sendSubviewToBack:pill];
         }
     }
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
 }
 
 %end
@@ -546,6 +569,11 @@ static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor, BOOL i
         ? [UIColor colorWithWhite:0.5f alpha:0.35f]
         : [UIColor colorWithWhite:1.0f alpha:(isDark ? 0.36f : 0.78f)];
     LGRoundLargeArtworkInTree(self, borderColor, isStatic);
+
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
 }
 
 %end
@@ -705,6 +733,22 @@ static void LGStyleMiniPlayerHierarchy(UIView *root) {
 
 %group MiniPlayerHooks
 %hook YTMMiniPlayerView
+
+- (void)setAlpha:(CGFloat)alpha {
+    %orig;
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
+}
+
+- (void)setHidden:(BOOL)hidden {
+    %orig;
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
+}
 
 - (void)layoutSubviews {
     %orig;
