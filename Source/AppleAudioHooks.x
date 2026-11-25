@@ -38,18 +38,29 @@ static AmbientView *gSharedAmbientView = nil;
 static AmbientView *gBrowseAmbientView = nil;
 
 static NSHashTable *gTrackedRenderers = nil;
+static NSHashTable *gTrackedHAMPlayers = nil;
 static NSHashTable *gTrackedPlayers = nil;
 static NSHashTable *gTrackedEngines = nil;
 static NSString *gAudioLock = @"YTM_AUDIO_LOCK";
 static float gCurrentNativeGain = 1.0f;
+static __thread BOOL tApplyingNativeGain = NO;
 static BOOL gProgrammaticAdvance = NO;
 static NSString *gObservedAudioBackend = @"none yet";
 
+@interface MLHAMPlayer : NSObject
+@property (nonatomic, assign) float volume;
+@end
+
+@interface HAMPlayer : NSObject
+@property (nonatomic, assign) float volume;
+@end
+
 NSString *YTMObservedAudioBackend(void) {
     @synchronized(gAudioLock) {
-        return [NSString stringWithFormat:@"%@ (renderers=%lu, players=%lu, engines=%lu, gain=%.2f)",
+        return [NSString stringWithFormat:@"%@ (renderers=%lu, ham=%lu, players=%lu, engines=%lu, gain=%.2f)",
                 gObservedAudioBackend,
                 (unsigned long)gTrackedRenderers.count,
+                (unsigned long)gTrackedHAMPlayers.count,
                 (unsigned long)gTrackedPlayers.count,
                 (unsigned long)gTrackedEngines.count,
                 gCurrentNativeGain];
@@ -58,6 +69,7 @@ NSString *YTMObservedAudioBackend(void) {
 
 static void YTMApplyNativeGainToObject(id obj, float gain) {
     if (!obj) return;
+    tApplyingNativeGain = YES;
     @try {
         if ([obj isKindOfClass:[AVSampleBufferAudioRenderer class]]) {
             ((AVSampleBufferAudioRenderer *)obj).volume = gain;
@@ -65,8 +77,11 @@ static void YTMApplyNativeGainToObject(id obj, float gain) {
             ((AVPlayer *)obj).volume = gain;
         } else if ([obj isKindOfClass:[AVAudioEngine class]]) {
             ((AVAudioEngine *)obj).mainMixerNode.outputVolume = gain;
+        } else if ([obj respondsToSelector:@selector(setVolume:)]) {
+            ((void (*)(id, SEL, float))objc_msgSend)(obj, @selector(setVolume:), gain);
         }
     } @catch (__unused NSException *e) {}
+    tApplyingNativeGain = NO;
 }
 
 static void YTMInstallCrossfadeAdapters(void) {
@@ -74,70 +89,30 @@ static void YTMInstallCrossfadeAdapters(void) {
     dispatch_once(&once, ^{
         @synchronized(gAudioLock) {
             if (!gTrackedRenderers) gTrackedRenderers = [NSHashTable weakObjectsHashTable];
+            if (!gTrackedHAMPlayers) gTrackedHAMPlayers = [NSHashTable weakObjectsHashTable];
             if (!gTrackedPlayers) gTrackedPlayers = [NSHashTable weakObjectsHashTable];
             if (!gTrackedEngines) gTrackedEngines = [NSHashTable weakObjectsHashTable];
         }
 
         LGCrossfade *xf = LGCrossfade.shared;
         xf.setNativeGain = ^(float gain) {
-            NSArray *renderers = nil, *players = nil, *engines = nil;
+            NSArray *renderers = nil, *ham = nil, *players = nil, *engines = nil;
             @synchronized(gAudioLock) {
                 gCurrentNativeGain = gain;
                 renderers = gTrackedRenderers.allObjects;
+                ham = gTrackedHAMPlayers.allObjects;
                 players = gTrackedPlayers.allObjects;
                 engines = gTrackedEngines.allObjects;
             }
             for (id r in renderers) YTMApplyNativeGainToObject(r, gain);
+            for (id h in ham) YTMApplyNativeGainToObject(h, gain);
             for (id p in players) YTMApplyNativeGainToObject(p, gain);
             for (id e in engines) YTMApplyNativeGainToObject(e, gain);
         };
 
-        xf.advanceToNext = ^BOOL {
-            __block BOOL ok = NO;
-            void (^work)(void) = ^{
-                id target = gCurrentNowPlayingVC ?: gCurrentPlayerVC.parentViewController;
-                if (target && [target respondsToSelector:@selector(didTapNextButton)]) {
-                    gProgrammaticAdvance = YES;
-                    @try {
-                        ((void (*)(id, SEL))objc_msgSend)(target, @selector(didTapNextButton));
-                        ok = YES;
-                    } @catch (__unused NSException *e) {
-                        ok = NO;
-                    }
-                    gProgrammaticAdvance = NO;
-                }
-            };
-            if ([NSThread isMainThread]) work();
-            else dispatch_sync(dispatch_get_main_queue(), work);
-            return ok;
-        };
-
-        xf.currentTrackAsset = ^AVURLAsset * {
-            __block NSString *urlStr = nil;
-            void (^fetch)(void) = ^{
-                YTPlayerViewController *pvc = gCurrentPlayerVC;
-                YTIStreamingData *sd = pvc.playerResponse.playerData.streamingData;
-                if (!sd) return;
-                for (YTIFormatStream *fmt in sd.adaptiveFormatsArray) {
-                    if ([fmt respondsToSelector:@selector(URL)]) {
-                        id raw = [fmt URL];
-                        NSString *u = [raw isKindOfClass:[NSURL class]] ? [(NSURL *)raw absoluteString] : ([raw isKindOfClass:[NSString class]] ? (NSString *)raw : nil);
-                        if (u.length && ([u containsString:@"mime=audio"] || [u containsString:@"mime%3Daudio"])) {
-                            urlStr = u;
-                            break;
-                        }
-                    }
-                }
-                if (!urlStr.length && sd.hlsManifestURL.length) {
-                    urlStr = sd.hlsManifestURL;
-                }
-            };
-            if ([NSThread isMainThread]) fetch();
-            else dispatch_sync(dispatch_get_main_queue(), fetch);
-            if (!urlStr.length) return nil;
-            NSURL *url = [NSURL URLWithString:urlStr];
-            return url ? [AVURLAsset URLAssetWithURL:url options:nil] : nil;
-        };
+        // Use crash-free Dip mode (smooth fade out -> natural queue advance -> smooth fade in)
+        xf.advanceToNext = nil;
+        xf.currentTrackAsset = nil;
     });
 }
 
@@ -399,16 +374,66 @@ static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIVie
     return obj;
 }
 
-- (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
-    YTMInstallCrossfadeAdapters();
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    float scaled = volume * gCurrentNativeGain;
     @synchronized(gAudioLock) {
         if (![gTrackedRenderers containsObject:self]) [gTrackedRenderers addObject:self];
         gObservedAudioBackend = @"AVSampleBufferAudioRenderer";
-        if (gCurrentNativeGain < 0.999f) YTMApplyNativeGainToObject(self, gCurrentNativeGain);
+    }
+    %orig(scaled);
+}
+
+- (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    YTMInstallCrossfadeAdapters();
+    float targetGain = 1.0f;
+    BOOL needsUpdate = NO;
+    @synchronized(gAudioLock) {
+        if (![gTrackedRenderers containsObject:self]) [gTrackedRenderers addObject:self];
+        if ([gObservedAudioBackend isEqualToString:@"none yet"]) gObservedAudioBackend = @"AVSampleBufferAudioRenderer";
+        targetGain = gCurrentNativeGain;
+        needsUpdate = (targetGain < 0.999f);
+    }
+    if (needsUpdate) {
+        YTMApplyNativeGainToObject(self, targetGain);
     }
     %orig;
 }
 
+%end
+
+%group MLHAMGroup
+%hook MLHAMPlayer
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+        gObservedAudioBackend = @"MLHAMPlayer+AVSampleBufferAudioRenderer";
+    }
+    %orig(volume * gCurrentNativeGain);
+}
+%end
+%end
+
+%group HAMGroup
+%hook HAMPlayer
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+    }
+    %orig(volume * gCurrentNativeGain);
+}
+%end
 %end
 
 %hook AVPlayer
@@ -529,4 +554,10 @@ static void LGApplySliderPalette(UISlider *slider, LGPalette *p) {
 
     YTMInstallCrossfadeAdapters();
     %init;
+    if (objc_getClass("MLHAMPlayer")) {
+        %init(MLHAMGroup);
+    }
+    if (objc_getClass("HAMPlayer")) {
+        %init(HAMGroup);
+    }
 }

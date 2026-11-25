@@ -1,8 +1,7 @@
-// LGCrossfade.m : Equal-power crossfade state machine with ARC/thread-safety guards.
+// LGCrossfade.m : Equal-power crossfade state machine (main-thread safe gain dispatching).
 #import "LGCrossfade.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
-#import <objc/runtime.h>
 #include <math.h>
 
 static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, MIN(hi, x)); }
@@ -16,7 +15,7 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     BOOL _busy, _needFadeIn;
     CFTimeInterval _fadeInDeadline;
     AVPlayer *_tail;
-    int _tailStage;        // 0 none, 1 created, 2 prerolling, 3 ready, -1 failed
+    int _tailStage;
     double _tailSeekPos;
 }
 
@@ -73,6 +72,18 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     @synchronized(self) { _status = [s copy]; }
 }
 
+- (void)applyGainSafe:(float)gain {
+    void (^setter)(float) = self.setNativeGain;
+    if (!setter) return;
+    if ([NSThread isMainThread]) {
+        setter(gain);
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            setter(gain);
+        });
+    }
+}
+
 #pragma mark - input
 
 - (void)noteNowPlayingInfo:(NSDictionary *)info {
@@ -89,8 +100,13 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
         self->_total = tot;
         self->_rate = rate;
         self->_wall0 = CACurrentMediaTime();
-        if (newTrack) [self onNewTrack];
-        else if (rate <= 0 && !self->_busy && !self->_needFadeIn && self.setNativeGain) self.setNativeGain(1.0f);
+        if (newTrack) {
+            [self onNewTrack];
+        } else if (self->_needFadeIn && el < 3.0 && rate > 0 && !self->_busy) {
+            [self fadeInNative];
+        } else if (rate <= 0 && !self->_busy && !self->_needFadeIn) {
+            [self applyGainSafe:1.0f];
+        }
         [self startTick];
     });
 }
@@ -107,123 +123,33 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 #pragma mark - state machine (all on _q)
 
 - (void)onNewTrack {
-    if (_busy) return; // our own overlap caused this change
+    if (_busy) return;
+    if (_ramp) { dispatch_source_cancel(_ramp); _ramp = nil; }
     [self teardownTail];
     if (_needFadeIn) [self fadeInNative];
-    else if (self.setNativeGain) self.setNativeGain(1.0f);
+    else [self applyGainSafe:1.0f];
 }
 
 - (void)evaluate {
     if (_needFadeIn && CACurrentMediaTime() > _fadeInDeadline) {
         _needFadeIn = NO;
-        if (self.setNativeGain) self.setNativeGain(1.0f);
-        [self setStatusText:@"recovered (next track never started)"];
+        [self applyGainSafe:1.0f];
+        [self setStatusText:@"recovered (next track timeout)"];
     }
     if (!self.enabled || !self.setNativeGain || _rate <= 0 || _total <= 0 || _busy) return;
     double N = self.seconds;
-    if (_total < 2 * N + 2) return; // too short to crossfade
+    if (_total < 2 * N + 2) return;
     double elapsed = _elapsed0 + (CACurrentMediaTime() - _wall0) * _rate;
     double remaining = _total - elapsed;
     if (remaining > N + 5) {
         _firedKey = nil;
         _prepKey = nil;
+        if (_needFadeIn) [self fadeInNative];
         return;
     }
-    BOOL overlap = self.advanceToNext && self.currentTrackAsset;
-    if (overlap) {
-        if (remaining <= N + 3 && ![_prepKey isEqualToString:_key]) [self prepareTail:_total - N];
-        [self advanceTailStage];
-        if (remaining <= N && remaining > -1 && ![_firedKey isEqualToString:_key]) [self fireOverlap:remaining];
-    } else if (remaining <= N && remaining > 0.2 && ![_firedKey isEqualToString:_key]) {
+    if (remaining <= N && remaining > 0.15 && ![_firedKey isEqualToString:_key]) {
         [self fireDip:remaining];
     }
-}
-
-- (void)prepareTail:(double)position {
-    _prepKey = _key;
-    [self teardownTail];
-    AVURLAsset *asset = self.currentTrackAsset ? self.currentTrackAsset() : nil;
-    if (!asset) {
-        _tailStage = -1;
-        return;
-    }
-    AVPlayer *p = [AVPlayer playerWithPlayerItem:[AVPlayerItem playerItemWithAsset:asset]];
-    objc_setAssociatedObject(p, "LGTailPlayer", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    p.volume = 0;
-    p.automaticallyWaitsToMinimizeStalling = NO;
-    p.actionAtItemEnd = AVPlayerActionAtItemEndPause;
-    _tail = p;
-    _tailStage = 1;
-    _tailSeekPos = MAX(0.0, position);
-}
-
-- (void)advanceTailStage {
-    AVPlayer *p = _tail;
-    if (!p) return;
-    if (p.currentItem.status == AVPlayerItemStatusFailed || p.status == AVPlayerStatusFailed) {
-        _tailStage = -1;
-        return;
-    }
-    if (_tailStage == 1 && p.status == AVPlayerStatusReadyToPlay && p.currentItem.status == AVPlayerItemStatusReadyToPlay) {
-        _tailStage = 2;
-        __weak LGCrossfade *w = self;
-        [p seekToTime:CMTimeMakeWithSeconds(_tailSeekPos, 600)
-      toleranceBefore:kCMTimeZero
-       toleranceAfter:kCMTimeZero
-    completionHandler:^(BOOL fin) {
-            if (!fin) return;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                @try {
-                    if (p.status == AVPlayerStatusReadyToPlay) {
-                        [p prerollAtRate:1.0 completionHandler:^(BOOL ok) {
-                            LGCrossfade *s = w;
-                            if (!s) return;
-                            dispatch_async(s->_q, ^{
-                                if (s->_tail == p) s->_tailStage = ok ? 3 : -1;
-                            });
-                        }];
-                    } else {
-                        LGCrossfade *s = w;
-                        if (s) dispatch_async(s->_q, ^{ if (s->_tail == p) s->_tailStage = -1; });
-                    }
-                } @catch (__unused NSException *e) {
-                    LGCrossfade *s = w;
-                    if (s) dispatch_async(s->_q, ^{ if (s->_tail == p) s->_tailStage = -1; });
-                }
-            });
-        }];
-    }
-}
-
-- (void)fireOverlap:(double)remaining {
-    _firedKey = _key;
-    if (_tailStage != 3) {
-        [self setStatusText:@"tail not ready -> dip"];
-        [self fireDip:MAX(0.5, remaining)];
-        return;
-    }
-    _busy = YES;
-    [self setStatusText:@"overlapping"];
-    self.setNativeGain(0.0f);
-    if (!self.advanceToNext()) {
-        self.setNativeGain(1.0f);
-        [self teardownTail];
-        _busy = NO;
-        [self setStatusText:@"advance failed"];
-        return;
-    }
-    AVPlayer *tail = _tail;
-    tail.volume = 1.0f;
-    [tail play];
-    [self rampOver:self.seconds step:^(double t) {
-        tail.volume = (float)cos(t * M_PI_2);
-        self.setNativeGain((float)sin(t * M_PI_2));
-    } done:^{
-        [self teardownTail];
-        self.setNativeGain(1.0f);
-        self->_busy = NO;
-        [self setStatusText:@"idle"];
-    }];
 }
 
 - (void)fireDip:(double)remaining {
@@ -231,11 +157,13 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     _busy = YES;
     [self setStatusText:@"fading out"];
     [self rampOver:LGXClamp(remaining, 0.5, self.seconds) step:^(double t) {
-        self.setNativeGain((float)cos(t * M_PI_2));
+        [self applyGainSafe:(float)cos(t * M_PI_2)];
     } done:^{
+        [self applyGainSafe:0.0f];
         self->_needFadeIn = YES;
-        self->_fadeInDeadline = CACurrentMediaTime() + 20.0;
+        self->_fadeInDeadline = CACurrentMediaTime() + 15.0;
         self->_busy = NO;
+        [self setStatusText:@"waiting for next track"];
     }];
 }
 
@@ -244,9 +172,9 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     _busy = YES;
     [self setStatusText:@"fading in"];
     [self rampOver:LGXClamp(self.seconds / 2.0, 0.5, 3.0) step:^(double t) {
-        self.setNativeGain((float)sin(t * M_PI_2));
+        [self applyGainSafe:(float)sin(t * M_PI_2)];
     } done:^{
-        self.setNativeGain(1.0f);
+        [self applyGainSafe:1.0f];
         self->_busy = NO;
         [self setStatusText:@"idle"];
     }];
@@ -274,8 +202,10 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     _tail = nil;
     _tailStage = 0;
     if (p) {
-        [p pause];
-        [p replaceCurrentItemWithPlayerItem:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [p pause];
+            [p replaceCurrentItemWithPlayerItem:nil];
+        });
     }
 }
 
@@ -288,7 +218,7 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
         [self teardownTail];
         self->_busy = NO;
         self->_needFadeIn = NO;
-        if (self.setNativeGain) self.setNativeGain(1.0f);
+        [self applyGainSafe:1.0f];
         [self setStatusText:@"idle"];
     });
 }
