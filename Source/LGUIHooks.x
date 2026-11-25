@@ -6,6 +6,7 @@
 #import "Headers/YTMPlayerControlsView.h"
 #import "Headers/YTPivotBarView.h"
 #import "Headers/YTPivotBarItemView.h"
+#import "Headers/YTQTMButton.h"
 #import "Headers/YTMActionRowView.h"
 #import "Headers/YTMBrowseViewController.h"
 #import "Headers/YTMWatchViewController.h"
@@ -19,6 +20,9 @@
 @end
 
 @interface YTMPlayerCarouselView : UIView
+@end
+
+@interface YTMPlaylistPanelVideoCell : UIView
 @end
 
 @interface YTMPlayerTabView : UIView
@@ -99,7 +103,7 @@ static BOOL LGAncestorHasLGBackground(UIView *v) {
     UIView *cur = v.superview;
     while (cur) {
         for (UIView *sub in cur.subviews) {
-            if ([sub isKindOfClass:[LGBackgroundView class]]) return YES;
+            if ([sub isKindOfClass:[LGBackgroundView class]] && !sub.hidden && sub.alpha > 0.5f) return YES;
         }
         cur = cur.superview;
     }
@@ -119,28 +123,46 @@ static void LGSyncWatchBackgroundAlpha(UIView *watchView, UIView *nowPlayingView
     }
     if (!bg) return;
 
+    CGFloat watchH = watchView.bounds.size.height;
     UIView *np = nowPlayingView;
-    if (!np) {
-        Class npCls = objc_getClass("YTMNowPlayingView");
-        if (npCls) {
-            // Walk up to 3 levels to find YTMNowPlayingView without costly full-tree recursion
-            for (UIView *sub in watchView.subviews) {
-                if ([sub isKindOfClass:npCls]) { np = sub; break; }
-                for (UIView *sub2 in sub.subviews) {
-                    if ([sub2 isKindOfClass:npCls]) { np = sub2; break; }
-                    for (UIView *sub3 in sub2.subviews) {
-                        if ([sub3 isKindOfClass:npCls]) { np = sub3; break; }
-                    }
-                    if (np) break;
-                }
-                if (np) break;
+    Class npCls = objc_getClass("YTMNowPlayingView");
+    Class miniCls = objc_getClass("YTMMiniPlayerView");
+    Class tabCls = objc_getClass("YTMPlayerTabView");
+    UIView *mini = nil;
+    UIView *tab = nil;
+
+    for (UIView *sub in watchView.subviews) {
+        if (!np && npCls && [sub isKindOfClass:npCls]) np = sub;
+        if (!mini && miniCls && [sub isKindOfClass:miniCls]) mini = sub;
+        if (!tab && tabCls && [sub isKindOfClass:tabCls]) tab = sub;
+        for (UIView *sub2 in sub.subviews) {
+            if (!np && npCls && [sub2 isKindOfClass:npCls]) np = sub2;
+            if (!mini && miniCls && [sub2 isKindOfClass:miniCls]) mini = sub2;
+            if (!tab && tabCls && [sub2 isKindOfClass:tabCls]) tab = sub2;
+            for (UIView *sub3 in sub2.subviews) {
+                if (!np && npCls && [sub3 isKindOfClass:npCls]) np = sub3;
             }
         }
     }
 
-    if (np) {
-        bg.alpha = np.hidden ? 0.0f : np.alpha;
+    CGFloat targetAlpha = 0.0f;
+    if (np && !np.hidden) {
+        targetAlpha = MAX(targetAlpha, np.alpha);
     }
+    // Keep blurred background opaque when Queue / Lyrics / Related sheet is open (Mini Player docked at top or TabView expanded)
+    if (mini && !mini.hidden && mini.alpha > 0.05f && watchH > 200.0f) {
+        CGRect mf = [watchView convertRect:mini.bounds fromView:mini];
+        if (mf.origin.y < watchH * 0.45f) {
+            targetAlpha = 1.0f;
+        }
+    }
+    if (tab && !tab.hidden && tab.alpha > 0.05f && watchH > 200.0f) {
+        CGRect tf = [watchView convertRect:tab.bounds fromView:tab];
+        if (tf.size.height > 160.0f && tf.origin.y < watchH - 180.0f) {
+            targetAlpha = 1.0f;
+        }
+    }
+    bg.alpha = targetAlpha;
 }
 
 static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
@@ -171,6 +193,25 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
         btn.layer.shadowOffset = CGSizeMake(0, 4);
         btn.layer.shadowRadius = 14.0f;
         btn.layer.shadowOpacity = 0.55f;
+    }
+}
+
+static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
+    if (!btn) return;
+    btn.backgroundColor = [UIColor clearColor];
+    btn.layer.borderWidth = 0.0f;
+    btn.layer.shadowOpacity = 0.0f;
+    UIColor *glyph = p.tx ?: UIColor.whiteColor;
+    btn.tintColor = glyph;
+    if ([btn isKindOfClass:[UIButton class]]) {
+        UIButton *uib = (UIButton *)btn;
+        uib.imageView.tintColor = glyph;
+        [uib setTitleColor:glyph forState:UIControlStateNormal];
+    }
+    for (UIView *sub in btn.subviews) {
+        if ([sub isKindOfClass:[UIImageView class]]) {
+            sub.tintColor = glyph;
+        }
     }
 }
 
@@ -320,7 +361,7 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
     if (sz.width > 120.0f && sz.height > 120.0f) {
         LGGlassView *card = LGAttachGlass(self, 28.0f);
         card.autoresizingMask = UIViewAutoresizingNone;
-        card.frame = CGRectMake(8.0f, -12.0f, sz.width - 16.0f, sz.height + 22.0f);
+        card.frame = CGRectMake(8.0f, -6.0f, sz.width - 16.0f, sz.height + 14.0f);
         [self sendSubviewToBack:card];
     }
 
@@ -368,22 +409,46 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
 %end
 %end
 
+static void LGUpdatePlayerControlsButtons(UIView *controls, LGPalette *p, BOOL staticMode) {
+    CGSize sz = controls.bounds.size;
+    if (sz.width < 40.0f) return;
+
+    // Identify ONLY the single centered Play/Pause button
+    UIView *playBtn = nil;
+    CGFloat bestScore = CGFLOAT_MAX;
+    for (UIView *sub in controls.subviews) {
+        if ([sub isKindOfClass:[LGGlassView class]] || sub.hidden) continue;
+        if (![sub isKindOfClass:[UIButton class]] && ![NSStringFromClass([sub class]) containsString:@"Button"]) continue;
+        CGSize bs = sub.bounds.size;
+        if (bs.width < 44.0f || bs.height < 44.0f) continue;
+        CGFloat dx = fabs(CGRectGetMidX(sub.frame) - sz.width * 0.5f);
+        if (dx < 28.0f) {
+            CGFloat score = dx - bs.width * 0.1f; // prefer dead-center & larger height
+            if (score < bestScore) {
+                bestScore = score;
+                playBtn = sub;
+            }
+        }
+    }
+
+    for (UIView *sub in controls.subviews) {
+        if ([sub isKindOfClass:[LGGlassView class]]) continue;
+        if (![sub isKindOfClass:[UIButton class]] && ![NSStringFromClass([sub class]) containsString:@"Button"]) continue;
+        if (sub == playBtn) {
+            LGStylePlayButton(sub, p, staticMode);
+        } else {
+            LGResetSecondaryTransportButton(sub, p);
+        }
+    }
+}
+
 %group PlayerControlsHooks
 %hook YTMPlayerControlsView
 
 - (void)layoutSubviews {
     %orig;
     LGApplyThemeObserver(self, ^(UIView *v, LGPalette *p, __unused BOOL dark, BOOL staticMode) {
-        for (UIView *sub in v.subviews) {
-            NSString *cls = NSStringFromClass([sub class]);
-            if ([cls containsString:@"FloatingButton"]) {
-                LGStylePlayButton(sub, p, staticMode);
-            } else if ([sub isKindOfClass:[UIButton class]] && sub.bounds.size.width > 56.0f && sub.bounds.size.height > 56.0f) {
-                LGStylePlayButton(sub, p, staticMode);
-            } else if ([sub isKindOfClass:[UIButton class]] && p.tx) {
-                sub.tintColor = p.tx;
-            }
-        }
+        LGUpdatePlayerControlsButtons(v, p, staticMode);
         [v setNeedsLayout];
     });
 
@@ -397,18 +462,7 @@ static void LGStylePlayButton(UIView *btn, LGPalette *p, BOOL staticMode) {
         [self sendSubviewToBack:pill];
     }
 
-    LGPalette *p = LGTheme.shared.palette;
-    BOOL staticMode = LGTheme.shared.staticMode;
-    for (UIView *sub in self.subviews) {
-        if ([sub isKindOfClass:[LGGlassView class]]) continue;
-        NSString *cls = NSStringFromClass([sub class]);
-        if ([cls containsString:@"FloatingButton"] ||
-            ([sub isKindOfClass:[UIButton class]] && sub.bounds.size.width >= 56.0f && sub.bounds.size.height >= 56.0f)) {
-            LGStylePlayButton(sub, p, staticMode);
-        } else if ([sub isKindOfClass:[UIButton class]] && p.tx) {
-            sub.tintColor = p.tx;
-        }
-    }
+    LGUpdatePlayerControlsButtons(self, LGTheme.shared.palette, LGTheme.shared.staticMode);
 }
 
 %end
@@ -454,6 +508,12 @@ static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor, BOOL i
             sub.clipsToBounds = YES;
             sub.layer.borderWidth = 1.15f;
             sub.layer.borderColor = borderColor.CGColor;
+            // Slightly inset edge-to-edge covers so rounded borders & ambient halo show cleanly
+            if (sub.bounds.size.width >= 360.0f && sub.bounds.size.height >= 300.0f) {
+                sub.transform = CGAffineTransformMakeScale(0.92f, 0.92f);
+            } else {
+                sub.transform = CGAffineTransformIdentity;
+            }
             if (sub.superview && !isStatic) {
                 sub.superview.clipsToBounds = NO;
                 sub.superview.layer.shadowColor = UIColor.blackColor.CGColor;
@@ -486,6 +546,24 @@ static void LGRoundLargeArtworkInTree(UIView *root, UIColor *borderColor, BOOL i
         ? [UIColor colorWithWhite:0.5f alpha:0.35f]
         : [UIColor colorWithWhite:1.0f alpha:(isDark ? 0.36f : 0.78f)];
     LGRoundLargeArtworkInTree(self, borderColor, isStatic);
+}
+
+%end
+%end
+
+%group PlaylistCellHooks
+%hook YTMPlaylistPanelVideoCell
+
+- (void)layoutSubviews {
+    %orig;
+    if (self.bounds.size.height >= 160.0f && self.bounds.size.width >= 160.0f) {
+        BOOL isStatic = LGTheme.shared.staticMode;
+        BOOL isDark = LGTheme.shared.dark;
+        UIColor *borderColor = isStatic
+            ? [UIColor colorWithWhite:0.5f alpha:0.35f]
+            : [UIColor colorWithWhite:1.0f alpha:(isDark ? 0.36f : 0.78f)];
+        LGRoundLargeArtworkInTree(self, borderColor, isStatic);
+    }
 }
 
 %end
@@ -573,19 +651,29 @@ static void LGColorScrubber(UIView *scrubber, LGPalette *p, BOOL dark) {
         // Collapsed bottom queue bar ("Song mix >")
         CGFloat pillH = MIN(56.0f, MAX(44.0f, sz.height - safeBottom - 8.0f));
         glass.radius = 22.0f;
+        glass.backgroundColor = UIColor.clearColor;
         glass.frame = CGRectMake(12.0f, 4.0f, sz.width - 24.0f, pillH);
     } else {
-        // Expanded queue drawer sheet
+        // Expanded Queue / Lyrics / Related sheet: frosted glass over opaque Watch background
         glass.radius = 28.0f;
+        LGTheme *t = LGTheme.shared;
+        glass.backgroundColor = t.staticMode
+            ? UIColor.clearColor
+            : [UIColor colorWithWhite:(t.dark ? 0.0f : 1.0f) alpha:(t.dark ? 0.32f : 0.24f)];
         glass.frame = CGRectMake(8.0f, 0.0f, sz.width - 16.0f, sz.height + 28.0f);
     }
     [self sendSubviewToBack:glass];
+
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
 }
 
 %end
 %end
 
-#pragma mark - Mini Player (Floating Inset Capsule, Zero Seam)
+#pragma mark - Mini Player (Floating Inset Capsule, Zero Seam, Zero Art Bulge)
 
 static void LGStyleMiniPlayerHierarchy(UIView *root) {
     for (UIView *sub in root.subviews) {
@@ -595,6 +683,9 @@ static void LGStyleMiniPlayerHierarchy(UIView *root) {
             [cls containsString:@"YTMPlaylistPanelVideoCell"] ||
             [cls containsString:@"YTMGradientBackgroundView"]) {
             sub.backgroundColor = [UIColor clearColor];
+            if ([sub isKindOfClass:[UICollectionView class]]) {
+                sub.clipsToBounds = YES;
+            }
         } else if (sub.backgroundColor) {
             CGFloat white = 0, alpha = 0;
             if ([sub.backgroundColor getWhite:&white alpha:&alpha] && alpha > 0.01f && alpha < 0.25f && sub.bounds.size.height > 20.0f) {
@@ -604,6 +695,8 @@ static void LGStyleMiniPlayerHierarchy(UIView *root) {
         if ([cls isEqualToString:@"YTImageView"] && sub.bounds.size.width >= 36.0f && sub.bounds.size.width <= 72.0f) {
             sub.layer.cornerRadius = 10.0f;
             sub.clipsToBounds = YES;
+            // Slightly scale down & nudge 48x48 cover so it sits cleanly inside the 18pt rounded capsule corner without bulging
+            sub.transform = CGAffineTransformMakeScale(0.84f, 0.84f);
         } else if (sub.subviews.count > 0 && ![cls containsString:@"Scrubber"]) {
             LGStyleMiniPlayerHierarchy(sub);
         }
@@ -640,20 +733,25 @@ static void LGStyleMiniPlayerHierarchy(UIView *root) {
 
     CGSize sz = self.bounds.size;
     if (sz.width > 120.0f && sz.height > 36.0f) {
-        LGGlassView *capsule = LGAttachGlass(self, 22.0f);
+        LGGlassView *capsule = LGAttachGlass(self, 18.0f);
         capsule.autoresizingMask = UIViewAutoresizingNone;
-        capsule.frame = CGRectMake(12.0f, 2.0f, sz.width - 24.0f, sz.height - 4.0f);
+        capsule.frame = CGRectMake(8.0f, 1.0f, sz.width - 16.0f, sz.height - 2.0f);
         [self sendSubviewToBack:capsule];
 
         // Tuck bottom mini scrubber cleanly inside the capsule rounded corners
         Class scrubberCls = objc_getClass("YTMStoryboardScrubber");
         for (UIView *sub in self.subviews) {
             if (scrubberCls && [sub isKindOfClass:scrubberCls] && sub.bounds.size.height <= 4.0f) {
-                sub.frame = CGRectMake(26.0f, sz.height - 5.0f, sz.width - 52.0f, 2.0f);
+                sub.frame = CGRectMake(24.0f, sz.height - 4.0f, sz.width - 48.0f, 2.0f);
                 LGColorScrubber(sub, LGTheme.shared.palette, LGTheme.shared.dark);
             }
         }
     }
+
+    UIView *cur = self.superview;
+    Class watchCls = objc_getClass("YTMWatchView");
+    while (cur && watchCls && ![cur isKindOfClass:watchCls]) cur = cur.superview;
+    if (cur) LGSyncWatchBackgroundAlpha(cur, nil);
 }
 
 %end
@@ -798,7 +896,7 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
     }
 
     if (pill) {
-        CGRect pr = CGRectInset(item.bounds, 4.0f, 3.0f);
+        CGRect pr = CGRectInset(item.bounds, 4.0f, 4.0f);
         if (pr.size.width > 8.0f && pr.size.height > 8.0f) {
             pill.frame = pr;
             pill.layer.cornerRadius = pr.size.height * 0.5f;
@@ -843,6 +941,18 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
 
 %end
 
+%hook YTQTMButton
+
+- (void)setSelected:(BOOL)selected {
+    %orig;
+    Class itemCls = objc_getClass("YTPivotBarItemView");
+    if (itemCls && [self.superview isKindOfClass:itemCls]) {
+        LGUpdatePivotItemVisual((YTPivotBarItemView *)self.superview);
+    }
+}
+
+%end
+
 %hook YTPivotBarView
 
 - (UIView *)contentView {
@@ -882,31 +992,52 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
     CGSize sz = self.bounds.size;
     if (sz.width < 120.0f || sz.height < 40.0f) return;
 
-    // Hug YTPivotBarItemView bounds vertically so home indicator safe area stays clear
+    // Remap tab items into [18 .. sz.width - 18] so outer icons and active pill never overhang the floating capsule
     Class itemCls = objc_getClass("YTPivotBarItemView");
-    CGRect itemUnion = CGRectNull;
     UIView *container = cv ?: self;
+    CGFloat capSide = 18.0f;
+    CGFloat capInnerW = sz.width - capSide * 2.0f;
+    NSMutableArray<UIView *> *items = [NSMutableArray array];
     for (UIView *sub in container.subviews) {
         if (itemCls && [sub isKindOfClass:itemCls] && !sub.hidden && sub.bounds.size.width > 10.0f) {
-            CGRect r = [self convertRect:sub.bounds fromView:sub];
-            itemUnion = CGRectIsNull(itemUnion) ? r : CGRectUnion(itemUnion, r);
+            [items addObject:sub];
         }
+    }
+    if (items.count > 0) {
+        [items sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+            return a.frame.origin.x < b.frame.origin.x ? NSOrderedAscending : (a.frame.origin.x > b.frame.origin.x ? NSOrderedDescending : NSOrderedSame);
+        }];
+        CGFloat slotW = capInnerW / (CGFloat)items.count;
+        for (NSUInteger idx = 0; idx < items.count; idx++) {
+            UIView *it = items[idx];
+            CGRect f = it.frame;
+            f.origin.x = capSide + idx * slotW;
+            f.size.width = slotW;
+            it.frame = f;
+        }
+    }
+
+    // Hug YTPivotBarItemView bounds vertically so home indicator safe area stays clear
+    CGRect itemUnion = CGRectNull;
+    for (UIView *sub in items) {
+        CGRect r = [self convertRect:sub.bounds fromView:sub];
+        itemUnion = CGRectIsNull(itemUnion) ? r : CGRectUnion(itemUnion, r);
     }
 
     CGFloat safeBottom = 0.0f;
     if (@available(iOS 11.0, *)) {
         safeBottom = self.safeAreaInsets.bottom;
     }
-    CGFloat pillY = 2.0f;
-    CGFloat pillH = MIN(58.0f, MAX(48.0f, sz.height - safeBottom - 4.0f));
+    CGFloat pillY = 1.0f;
+    CGFloat pillH = MIN(60.0f, MAX(52.0f, sz.height - safeBottom - 2.0f));
     if (!CGRectIsNull(itemUnion) && itemUnion.size.height >= 36.0f && itemUnion.size.height <= 64.0f) {
-        pillY = MAX(0.0f, itemUnion.origin.y - 4.0f);
-        pillH = itemUnion.size.height + 8.0f;
+        pillY = MAX(0.0f, itemUnion.origin.y - 3.0f);
+        pillH = MAX(52.0f, itemUnion.size.height + 6.0f);
     }
 
     LGGlassView *capsule = LGAttachGlass(self, pillH * 0.5f);
     capsule.autoresizingMask = UIViewAutoresizingNone;
-    capsule.frame = CGRectMake(18.0f, pillY, sz.width - 36.0f, pillH);
+    capsule.frame = CGRectMake(14.0f, pillY, sz.width - 28.0f, pillH);
     [self sendSubviewToBack:capsule];
 }
 
@@ -923,13 +1054,14 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
     if (objc_getClass("YTMPlayerControlsView"))            %init(PlayerControlsHooks);
     if (objc_getClass("YTMPlayerHeaderView"))              %init(PlayerHeaderHooks);
     if (objc_getClass("YTMPlayerCarouselView"))            %init(PlayerCarouselHooks);
+    if (objc_getClass("YTMPlaylistPanelVideoCell"))        %init(PlaylistCellHooks);
     if (objc_getClass("YTMStoryboardScrubber"))            %init(ScrubberHooks);
     if (objc_getClass("YTMPlayerTabView"))                 %init(PlayerTabViewHooks);
     if (objc_getClass("YTMMiniPlayerView"))                %init(MiniPlayerHooks);
     if (objc_getClass("YTMChipCloudScrollableChipView"))   %init(ChipCloudHooks);
     if (objc_getClass("YTMActionRowView"))                 %init(ActionRowHooks);
     %init(SliderHooks);
-    if (objc_getClass("YTPivotBarView") && objc_getClass("YTPivotBarItemView")) {
+    if (objc_getClass("YTPivotBarView") && objc_getClass("YTPivotBarItemView") && objc_getClass("YTQTMButton")) {
         %init(PivotBarHooks);
     }
 }
