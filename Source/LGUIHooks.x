@@ -16,6 +16,21 @@
 @interface YTMContentViewController : UIViewController
 @end
 
+@interface GOOHeaderViewController : UIViewController
+@end
+
+@interface MDCFlexibleHeaderView : UIView
+@end
+
+@interface YTMSearchTabViewController : UIViewController
+@end
+
+@interface YTMTabViewController : UIViewController
+@end
+
+@interface YTLightweightCollectionViewController : UIViewController
+@end
+
 @interface YTMPlayerHeaderView : UIView
 @end
 
@@ -266,6 +281,73 @@ static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
 %end
 %end
 
+static BOOL LGIsOpaqueCanvasColor(UIColor *c) {
+    if (!c) return NO;
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if ([c getRed:&r green:&g blue:&b alpha:&a]) {
+        if (a <= 0.85f) return NO;
+        BOOL isDarkCanvas = (r < 0.16f && g < 0.16f && b < 0.16f);
+        BOOL isWhiteCanvas = (r > 0.94f && g > 0.94f && b > 0.94f);
+        return isDarkCanvas || isWhiteCanvas;
+    }
+    CGFloat w = 0;
+    if ([c getWhite:&w alpha:&a]) {
+        return a > 0.85f && (w < 0.16f || w > 0.94f);
+    }
+    return NO;
+}
+
+static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
+    if (!root || depth > 5) return;
+    NSString *cls = NSStringFromClass([root class]);
+    if ([root isKindOfClass:[LGBackgroundView class]] ||
+        [root isKindOfClass:[LGGlassView class]] ||
+        [root isKindOfClass:[UIImageView class]] ||
+        [root isKindOfClass:[UIButton class]] ||
+        [root isKindOfClass:[UILabel class]] ||
+        [cls isEqualToString:@"YTImageView"] ||
+        [cls containsString:@"Chip"] ||
+        [cls containsString:@"PivotBar"] ||
+        [cls containsString:@"MiniPlayer"] ||
+        [cls containsString:@"WatchView"]) {
+        return;
+    }
+
+    // Attach frosted glass pill to Search input bars inside header/search views
+    if ([root isKindOfClass:[UITextField class]]) {
+        UIView *box = root.superview;
+        if (box && ![box isKindOfClass:[LGGlassView class]] &&
+            box.bounds.size.width >= 160.0f && box.bounds.size.height >= 30.0f && box.bounds.size.height <= 56.0f) {
+            root.backgroundColor = [UIColor clearColor];
+            LGGlassView *pill = LGAttachGlass(box, box.bounds.size.height * 0.5f);
+            pill.frame = box.bounds;
+            [box sendSubviewToBack:pill];
+        }
+        return;
+    }
+
+    BOOL isCell = [root isKindOfClass:[UITableViewCell class]] ||
+                  [root isKindOfClass:[UICollectionViewCell class]] ||
+                  [cls containsString:@"ASCollectionViewCell"];
+
+    if (!isCell && LGIsOpaqueCanvasColor(root.backgroundColor)) {
+        root.backgroundColor = [UIColor clearColor];
+    } else if ([root isKindOfClass:[UITableView class]] ||
+               [root isKindOfClass:[UICollectionView class]] ||
+               [cls containsString:@"MDCFlexibleHeaderView"] ||
+               [cls containsString:@"ChipCloudView"] ||
+               [cls containsString:@"YTWrapperView"]) {
+        if (![cls containsString:@"Cell"]) {
+            root.backgroundColor = [UIColor clearColor];
+        }
+    }
+
+    if (isCell) return;
+    for (UIView *sub in root.subviews) {
+        LGClearOpaqueBrowseHierarchy(sub, depth + 1);
+    }
+}
+
 %group BrowseVCHooks
 %hook YTMBrowseViewController
 
@@ -273,7 +355,8 @@ static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
     %orig;
     self.view.backgroundColor = [UIColor clearColor];
     if (!LGAncestorHasLGBackground(self.view)) {
-        LGInstallBackground(self.view);
+        LGBackgroundView *bg = LGInstallBackground(self.view);
+        if (bg) bg.scrimMultiplier = 1.35f;
     }
 }
 
@@ -290,6 +373,7 @@ static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
     if (!LGAncestorHasLGBackground(self.view)) {
         LGBackgroundView *bg = LGInstallBackground(self.view);
         if (bg) {
+            bg.scrimMultiplier = 1.35f;
             bg.frame = self.view.bounds;
             [self.view sendSubviewToBack:bg];
         }
@@ -300,6 +384,77 @@ static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
                 [sub removeFromSuperview];
             }
         }
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
+    }
+}
+
+%end
+%end
+
+%group GOOHeaderHooks
+%hook GOOHeaderViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self.view)) {
+        self.view.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
+    }
+}
+
+%end
+%end
+
+%group FlexibleHeaderHooks
+%hook MDCFlexibleHeaderView
+
+- (void)layoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self)) {
+        self.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self, 0);
+    }
+}
+
+%end
+%end
+
+%group SearchTabHooks
+%hook YTMSearchTabViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self.view)) {
+        self.view.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
+    }
+}
+
+%end
+%end
+
+%group TabVCHooks
+%hook YTMTabViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self.view)) {
+        self.view.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
+    }
+}
+
+%end
+%end
+
+%group LightweightCollectionVCHooks
+%hook YTLightweightCollectionViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self.view)) {
+        self.view.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
     }
 }
 
@@ -1091,8 +1246,13 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
 #pragma mark - Constructor (Runtime Class-Guarded Init)
 
 %ctor {
-    if (objc_getClass("YTMContentViewController"))         %init(ContentVCHooks);
-    if (objc_getClass("YTMBrowseViewController"))          %init(BrowseVCHooks);
+    if (objc_getClass("YTMContentViewController"))              %init(ContentVCHooks);
+    if (objc_getClass("YTMBrowseViewController"))               %init(BrowseVCHooks);
+    if (objc_getClass("GOOHeaderViewController"))               %init(GOOHeaderHooks);
+    if (objc_getClass("MDCFlexibleHeaderView"))                 %init(FlexibleHeaderHooks);
+    if (objc_getClass("YTMSearchTabViewController"))            %init(SearchTabHooks);
+    if (objc_getClass("YTMTabViewController"))                  %init(TabVCHooks);
+    if (objc_getClass("YTLightweightCollectionViewController")) %init(LightweightCollectionVCHooks);
     if (objc_getClass("YTMWatchViewController"))           %init(WatchVCHooks);
     if (objc_getClass("YTMNowPlayingView"))                %init(NowPlayingViewHooks);
     if (objc_getClass("YTMPlayerControlsView"))            %init(PlayerControlsHooks);

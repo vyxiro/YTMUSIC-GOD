@@ -81,9 +81,11 @@ static BOOL YTMU(NSString *key) {
 
         if (navEndpoint) {
             if ([navEndpoint.browseEndpoint.browseId isEqualToString:@"FEytmu_downloads"]) {
+                self.view.backgroundColor = [UIColor clearColor];
                 YTMDownloads *ytmuDownloadsVC = [[YTMDownloads alloc] init];
                 [self addChildViewController:ytmuDownloadsVC];
                 [ytmuDownloadsVC.view setFrame:CGRectMake(0.0f, 0.0f, self.view.frame.size.width, self.view.frame.size.height)];
+                ytmuDownloadsVC.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
                 [self.view addSubview:ytmuDownloadsVC.view];
                 [self.view endEditing:YES];
                 [ytmuDownloadsVC didMoveToParentViewController:self];

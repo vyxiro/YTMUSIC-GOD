@@ -1,15 +1,20 @@
 #import "YTMDownloads.h"
+#import "../LiquidGlass.h"
 
 @implementation YTMDownloads
 
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    self.view.backgroundColor = [UIColor clearColor];
     self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
     self.tableView.translatesAutoresizingMaskIntoConstraints = NO;
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
-    self.tableView.backgroundColor = [UIColor colorWithRed:3/255.0 green:3/255.0 blue:3/255.0 alpha:1.0];
+    self.tableView.backgroundColor = [UIColor clearColor];
+    self.tableView.backgroundView = nil;
+    self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    self.tableView.contentInset = UIEdgeInsetsMake(0.0f, 0.0f, 140.0f, 0.0f);
     [self.view addSubview:self.tableView];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -22,7 +27,29 @@
     [self maybeShowEmptyState];
     [self refreshAudioFiles];
 
+    __weak typeof(self) weakSelf = self;
+    self.themeObserver = LGObserveTheme(^(__unused LGPalette *palette, __unused BOOL dark, __unused BOOL staticMode) {
+        [weakSelf applyThemeColors];
+        [weakSelf.tableView reloadData];
+    });
+
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadData) name:@"ReloadDataNotification" object:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    self.view.backgroundColor = [UIColor clearColor];
+    if (self.parentViewController.view) {
+        self.parentViewController.view.backgroundColor = [UIColor clearColor];
+    }
+    [self applyThemeColors];
+}
+
+- (void)applyThemeColors {
+    LGPalette *p = LGTheme.shared.palette;
+    UIColor *emptyColor = self.audioFiles.count == 0 ? (p.mu ?: [[UIColor whiteColor] colorWithAlphaComponent:0.8]) : [UIColor clearColor];
+    self.imageView.tintColor = emptyColor;
+    self.label.textColor = emptyColor;
 }
 
 - (void)maybeShowEmptyState {
@@ -58,6 +85,9 @@
 }
 
 - (void)dealloc {
+    if (self.themeObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.themeObserver];
+    }
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -84,8 +114,7 @@
 
     self.audioFiles = [NSMutableArray arrayWithArray:[allFiles filteredArrayUsingPredicate:predicate]];
 
-    self.imageView.tintColor = self.audioFiles.count == 0 ? [[UIColor whiteColor] colorWithAlphaComponent:0.8] : [UIColor clearColor];
-    self.label.textColor = self.audioFiles.count == 0 ? [[UIColor whiteColor] colorWithAlphaComponent:0.8] : [UIColor clearColor];
+    [self applyThemeColors];
 }
 
 #pragma mark - Table view stuff
@@ -120,27 +149,49 @@
     return 0;
 }
 
+- (void)applyGlassBackgroundToCell:(UITableViewCell *)cell {
+    cell.backgroundColor = [UIColor clearColor];
+    cell.contentView.backgroundColor = [UIColor clearColor];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    if (![cell.backgroundView isKindOfClass:[UIView class]] || cell.backgroundView.tag != 9401) {
+        UIView *wrap = [[UIView alloc] initWithFrame:CGRectZero];
+        wrap.tag = 9401;
+        wrap.backgroundColor = [UIColor clearColor];
+        LGGlassView *g = [[LGGlassView alloc] initWithRadius:16.0f dark:LGTheme.shared.dark];
+        g.translatesAutoresizingMaskIntoConstraints = NO;
+        [wrap addSubview:g];
+        [NSLayoutConstraint activateConstraints:@[
+            [g.leadingAnchor constraintEqualToAnchor:wrap.leadingAnchor],
+            [g.trailingAnchor constraintEqualToAnchor:wrap.trailingAnchor],
+            [g.topAnchor constraintEqualToAnchor:wrap.topAnchor constant:3.0f],
+            [g.bottomAnchor constraintEqualToAnchor:wrap.bottomAnchor constant:-3.0f]
+        ]];
+        cell.backgroundView = wrap;
+    }
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    LGPalette *p = LGTheme.shared.palette;
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"cell"];
     if (cell == nil) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell"];
     }
 
     if (indexPath.section == 0 && indexPath.row < self.audioFiles.count) {
+        [self applyGlassBackgroundToCell:cell];
         cell.textLabel.text = [self.audioFiles[indexPath.row] stringByDeletingPathExtension];
         cell.textLabel.numberOfLines = 0;
-        cell.textLabel.textColor = [UIColor whiteColor];
-        cell.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.25];
+        cell.textLabel.textColor = p.tx ?: [UIColor whiteColor];
 
         NSString *imageName = [NSString stringWithFormat:@"%@.png", [self.audioFiles[indexPath.row] stringByDeletingPathExtension]];
         NSString *documentsDirectory = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
 
         UIImage *image = [UIImage imageWithContentsOfFile:[[documentsDirectory stringByAppendingPathComponent:@"YTMusicUltimate"] stringByAppendingPathComponent:imageName]];
-        CGFloat targetSize = 37.5;
-        CGFloat scaleFactor = targetSize / MAX(image.size.width, image.size.height);
-        CGSize scaledSize = CGSizeMake(image.size.width * scaleFactor, image.size.height * scaleFactor);
+        CGFloat targetSize = 40.0;
+        CGFloat scaleFactor = image ? (targetSize / MAX(1.0, MAX(image.size.width, image.size.height))) : 1.0;
+        CGSize scaledSize = image ? CGSizeMake(image.size.width * scaleFactor, image.size.height * scaleFactor) : CGSizeMake(targetSize, targetSize);
         UIGraphicsBeginImageContextWithOptions(scaledSize, NO, 0.0);
-        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, scaledSize.width, scaledSize.height) cornerRadius:6] addClip];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, scaledSize.width, scaledSize.height) cornerRadius:8] addClip];
         [image drawInRect:CGRectMake(0, 0, scaledSize.width, scaledSize.height)];
         UIImage *roundedImage = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
@@ -149,7 +200,11 @@
     }
 
     else if (indexPath.section == 1) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell0"];
+        cell = [tableView dequeueReusableCellWithIdentifier:@"cell0"];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"cell0"];
+        }
+        [self applyGlassBackgroundToCell:cell];
         NSArray *settingsData = @[
             @{@"title": LOC(@"SHARE_ALL"), @"icon": @"square.and.arrow.up.on.square"},
             @{@"title": LOC(@"REMOVE_ALL"), @"icon": @"trash"},
@@ -158,11 +213,10 @@
         NSDictionary *data = settingsData[indexPath.row];
 
         cell.textLabel.text = data[@"title"];
-        cell.textLabel.textColor = [UIColor whiteColor];
+        cell.textLabel.textColor = p.tx ?: [UIColor whiteColor];
         cell.textLabel.adjustsFontSizeToFitWidth = YES;
         cell.imageView.image = [UIImage systemImageNamed:data[@"icon"]];
-        cell.imageView.tintColor = indexPath.row == 1 ? [UIColor redColor] : [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
-        cell.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.25];
+        cell.imageView.tintColor = indexPath.row == 1 ? [UIColor systemRedColor] : (p.a1 ?: [UIColor systemBlueColor]);
     }
 
     return cell;

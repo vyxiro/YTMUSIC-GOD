@@ -44,7 +44,24 @@ static BOOL YTMU(NSString *key) {
     for (UIView *subview in subviews) {
         if ([subview isKindOfClass:NSClassFromString(@"YTMSortFilterButton")]) {
             sortFilterButton = subview;
-            break;
+        } else if (![subview isKindOfClass:[LGGlassView class]]) {
+            if (subview.bounds.size.width > 120.0f && subview.bounds.size.height > 20.0f) {
+                // Style Search pill container inside navigation bar if it holds a UITextField
+                BOOL hasField = [subview isKindOfClass:[UITextField class]];
+                for (UIView *inner in subview.subviews) {
+                    if ([inner isKindOfClass:[UITextField class]]) {
+                        hasField = YES;
+                        inner.backgroundColor = [UIColor clearColor];
+                    }
+                }
+                if (hasField && subview.bounds.size.height >= 30.0f && subview.bounds.size.height <= 54.0f) {
+                    LGGlassView *pill = LGAttachGlass(subview, subview.bounds.size.height * 0.5f);
+                    pill.frame = subview.bounds;
+                    [subview sendSubviewToBack:pill];
+                } else {
+                    subview.backgroundColor = [UIColor clearColor];
+                }
+            }
         }
     }
 
