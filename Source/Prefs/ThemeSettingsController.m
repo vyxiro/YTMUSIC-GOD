@@ -1,8 +1,9 @@
 #import "ThemeSettingsController.h"
-#import "../ThemeManager.h"
+#import "../LiquidGlass.h"
 #import "../Headers/ABCSwitch.h"
 
 @interface ThemeSettingsController ()
+@property (nonatomic, strong) UILabel *fadeValueLabel;
 @end
 
 @implementation ThemeSettingsController
@@ -24,14 +25,27 @@
         [self.tableView.heightAnchor constraintEqualToAnchor:self.view.heightAnchor]
     ]];
 
-    [[NSNotificationCenter defaultCenter] addObserver:self.tableView
-                                             selector:@selector(reloadData)
-                                                 name:YTMLiquidThemeDidChangeNotification
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(paletteDidChange)
+                                                 name:LGPaletteDidChangeNotification
                                                object:nil];
 }
 
 - (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self.tableView];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)paletteDidChange {
+    [self.tableView reloadData];
+}
+
+- (UISwitch *)makeSwitchWithOn:(BOOL)on action:(SEL)action {
+    Class abc = NSClassFromString(@"ABCSwitch");
+    UISwitch *sw = abc ? [[abc alloc] init] : [[UISwitch alloc] init];
+    sw.onTintColor = LGTheme.shared.palette.a1;
+    sw.on = on;
+    [sw addTarget:self action:action forControlEvents:UIControlEventValueChanged];
+    return sw;
 }
 
 #pragma mark - Table View Data Source
@@ -41,38 +55,40 @@
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 3;
+    return 4;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     switch (section) {
-        case 0: return @"LIQUID GLASS THEMES (APPLE MUSIC STYLE)";
-        case 1: return @"STATIC PALETTES (FLAT REFERENCE LOOK)";
-        case 2: return @"SURFACE & CONTRAST OPTIONS";
+        case 0: return @"STYLE & AMBIENT ENGINE";
+        case 1: return @"LIQUID GLASS PRESETS";
+        case 2: return @"STATIC LOOK PALETTES";
+        case 3: return @"EXTRAS";
         default: return nil;
     }
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 0) {
-        return @"Translucent, blurred, edge-lit glass with organic glowing background blobs.";
-    } else if (section == 1) {
-        return @"Flat solid colors with a single fixed glow behind album artwork (no blur).";
+    switch (section) {
+        case 0: return @"Style (Liquid or Static) and Colour Source (Preset or Ambient) work independently.";
+        case 1: return @"Used when Style is Liquid Glass and Ambient Mode is off.";
+        case 2: return @"Flat solid colours with a soft centre glow (no blur or glass).";
+        default: return nil;
     }
-    return nil;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
-        case 0: return 6; // Ambient, Aurora, Nebula, Mars, Ion, Solar
-        case 1: return 6; // Static toggle, Cherry, Midnight, Matcha, Lavender, Amber
-        case 2: return 3; // Light mode switch, OLED Pitch Black, OLED Keyboard
+        case 0: return 5; // Style, Ambient, Dark, Fade, Video
+        case 1: return (NSInteger)LGPalette.presetNames.count;
+        case 2: return (NSInteger)LGPalette.staticNames.count;
+        case 3: return 1; // OLED keyboard
         default: return 0;
     }
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    NSString *cellId = [NSString stringWithFormat:@"ThemeCell_%ld_%ld", (long)indexPath.section, (long)indexPath.row];
+    NSString *cellId = [NSString stringWithFormat:@"LGCell_%ld_%ld", (long)indexPath.section, (long)indexPath.row];
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellId];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cellId];
@@ -81,107 +97,83 @@
     cell.accessoryView = nil;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.imageView.image = nil;
+    cell.detailTextLabel.numberOfLines = 0;
+    cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
 
-    ThemeManager *tm = [ThemeManager sharedManager];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    LGTheme *theme = LGTheme.shared;
+    UIColor *accent = theme.palette.a1;
 
-    // SECTION 0: LIQUID GLASS
     if (indexPath.section == 0) {
-        NSArray *liquidData = @[
-            @{@"name": @"Ambient Mode", @"desc": @"Dynamic colors derived from currently playing track artwork", @"preset": @(YTMLiquidThemeAmbient), @"hex": @"#19D3B0"},
-            @{@"name": @"Aurora Teal", @"desc": @"Cold polar glow; calm & focused (#06191C / #19D3B0)", @"preset": @(YTMLiquidThemeAuroraTeal), @"hex": @"#19D3B0"},
-            @{@"name": @"Nebula Violet", @"desc": @"Deep-space purple (#110A24 / #9A7BFF / #FF5FB0)", @"preset": @(YTMLiquidThemeNebulaViolet), @"hex": @"#9A7BFF"},
-            @{@"name": @"Mars Rust", @"desc": @"Warm red-orange dust (#1C0B07 / #FF6A3D / #FFB347)", @"preset": @(YTMLiquidThemeMarsRust), @"hex": @"#FF6A3D"},
-            @{@"name": @"Ion Blue", @"desc": @"Electric thruster blue (#060D1F / #3D8BFF / #29E0FF)", @"preset": @(YTMLiquidThemeIonBlue), @"hex": @"#3D8BFF"},
-            @{@"name": @"Solar Amber", @"desc": @"Sunlit gold-to-rose (#1A1204 / #FFC21F / #FF6F91)", @"preset": @(YTMLiquidThemeSolarAmber), @"hex": @"#FFC21F"}
-        ];
-
-        NSDictionary *item = liquidData[indexPath.row];
-        cell.textLabel.text = item[@"name"];
-        cell.detailTextLabel.text = item[@"desc"];
-        cell.detailTextLabel.numberOfLines = 0;
-        cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
+        if (indexPath.row == 0) {
+            cell.textLabel.text = @"Style";
+            cell.detailTextLabel.text = theme.staticMode ? @"Static (Flat solid + soft glow)" : @"Liquid Glass (Gradient, blobs & blur)";
+            UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Liquid", @"Static"]];
+            seg.selectedSegmentIndex = theme.staticMode ? 1 : 0;
+            seg.selectedSegmentTintColor = accent;
+            [seg setTitleTextAttributes:@{NSForegroundColorAttributeName: theme.palette.onAccent ?: UIColor.whiteColor} forState:UIControlStateSelected];
+            [seg addTarget:self action:@selector(styleChanged:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = seg;
+        } else if (indexPath.row == 1) {
+            cell.textLabel.text = @"Ambient Mode";
+            cell.detailTextLabel.text = @"Derive colours dynamically from playing song artwork";
+            cell.accessoryView = [self makeSwitchWithOn:theme.ambient action:@selector(ambientToggled:)];
+        } else if (indexPath.row == 2) {
+            cell.textLabel.text = @"Dark Mode";
+            cell.detailTextLabel.text = @"Switch between Dark and Light colour variants";
+            cell.accessoryView = [self makeSwitchWithOn:theme.dark action:@selector(darkToggled:)];
+        } else if (indexPath.row == 3) {
+            double fade = [d objectForKey:@"LG_fade"] ? [d doubleForKey:@"LG_fade"] : 1.8;
+            cell.textLabel.text = [NSString stringWithFormat:@"Colour Fade (%.1fs)", fade];
+            cell.detailTextLabel.text = @"0.0s = instant transition";
+            UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 140, 32)];
+            slider.minimumValue = 0.0f;
+            slider.maximumValue = 4.0f;
+            slider.value = (float)fade;
+            slider.minimumTrackTintColor = accent;
+            slider.thumbTintColor = theme.palette.tx;
+            slider.continuous = NO;
+            [slider addTarget:self action:@selector(fadeChanged:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = slider;
+        } else if (indexPath.row == 4) {
+            cell.textLabel.text = @"Video Frame Sampling (Experimental)";
+            cell.detailTextLabel.text = @"Sample live video frames in Video mode (~1.5s)";
+            cell.accessoryView = [self makeSwitchWithOn:[d boolForKey:@"LG_video"] action:@selector(videoToggled:)];
+        }
+    } else if (indexPath.section == 1) {
+        NSArray<NSString *> *names = LGPalette.presetNames;
+        NSString *name = names[indexPath.row];
+        LGPalette *pal = [LGPalette presetNamed:name dark:theme.dark];
+        cell.textLabel.text = name;
+        cell.detailTextLabel.text = theme.ambient ? @"Preset paused while Ambient Mode is active" : @"Liquid Glass preset";
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 
-        NSInteger targetPreset = [item[@"preset"] integerValue];
-        if (!tm.isStaticMode && tm.liquidTheme == targetPreset) {
+        NSString *current = [d stringForKey:@"LG_theme"] ?: @"Aurora Teal";
+        if (!theme.staticMode && !theme.ambient && [current isEqualToString:name]) {
             cell.accessoryType = UITableViewCellAccessoryCheckmark;
+            cell.tintColor = accent;
         }
+        cell.imageView.image = [self swatchImageWithPrimary:pal.a1 secondary:pal.a2];
+    } else if (indexPath.section == 2) {
+        NSArray<NSString *> *names = LGPalette.staticNames;
+        NSString *name = names[indexPath.row];
+        LGPalette *pal = [LGPalette staticNamed:name dark:theme.dark];
+        cell.textLabel.text = name;
+        cell.detailTextLabel.text = theme.ambient ? @"Palette paused while Ambient Mode is active" : @"Static Look palette";
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 
-        // Swatch icon
-        UIView *swatch = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 22, 22)];
-        swatch.layer.cornerRadius = 11;
-        swatch.backgroundColor = [ThemeManager colorFromHexString:item[@"hex"]];
-        cell.imageView.image = [self imageFromView:swatch];
-    }
-    // SECTION 1: STATIC LOOK
-    else if (indexPath.section == 1) {
-        if (indexPath.row == 0) {
-            cell.textLabel.text = @"Static Look (Flat Reference)";
-            cell.detailTextLabel.text = @"Turns off floating blobs and glass blurs";
-
-            ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
-            sw.on = tm.isStaticMode;
-            [sw addTarget:self action:@selector(staticModeToggled:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = sw;
-        } else {
-            NSArray *staticData = @[
-                @{@"name": @"Cherry Red", @"desc": @"Signature red with high contrast (#FF0000 / #121212)", @"preset": @(YTMLiquidThemeStaticCherry), @"hex": @"#FF0000"},
-                @{@"name": @"Midnight Blue", @"desc": @"Electric cobalt & deep navy (#3B5BFF / #0B1230)", @"preset": @(YTMLiquidThemeStaticMidnight), @"hex": @"#3B5BFF"},
-                @{@"name": @"Matcha Green", @"desc": @"Fresh forest green (#00C853 / #0D2E1E)", @"preset": @(YTMLiquidThemeStaticMatcha), @"hex": @"#00C853"},
-                @{@"name": @"Lavender Haze", @"desc": @"Moody plum violet (#8A2BE2 / #1A0B28)", @"preset": @(YTMLiquidThemeStaticLavender), @"hex": @"#8A2BE2"},
-                @{@"name": @"Amber Glow", @"desc": @"Warm espresso orange (#FF8C00 / #2A1A0F)", @"preset": @(YTMLiquidThemeStaticAmber), @"hex": @"#FF8C00"}
-            ];
-
-            NSDictionary *item = staticData[indexPath.row - 1];
-            cell.textLabel.text = item[@"name"];
-            cell.detailTextLabel.text = item[@"desc"];
-            cell.detailTextLabel.numberOfLines = 0;
-            cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
-            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-
-            NSInteger targetPreset = [item[@"preset"] integerValue];
-            if (tm.isStaticMode && tm.liquidTheme == targetPreset) {
-                cell.accessoryType = UITableViewCellAccessoryCheckmark;
-            }
-
-            UIView *swatch = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 22, 22)];
-            swatch.layer.cornerRadius = 11;
-            swatch.backgroundColor = [ThemeManager colorFromHexString:item[@"hex"]];
-            cell.imageView.image = [self imageFromView:swatch];
+        NSString *current = [d stringForKey:@"LG_static_theme"] ?: @"Cherry Red";
+        if (theme.staticMode && !theme.ambient && [current isEqualToString:name]) {
+            cell.accessoryType = UITableViewCellAccessoryCheckmark;
+            cell.tintColor = accent;
         }
-    }
-    // SECTION 2: SURFACE CONTROLS
-    else if (indexPath.section == 2) {
-        if (indexPath.row == 0) {
-            cell.textLabel.text = @"Light Mode Palette";
-            cell.detailTextLabel.text = @"Switches translucent glass to airy light styling";
-
-            ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
-            sw.on = tm.isLightMode;
-            [sw addTarget:self action:@selector(lightModeToggled:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = sw;
-        } else if (indexPath.row == 1) {
-            cell.textLabel.text = @"True OLED Pitch Black (#000000)";
-            cell.detailTextLabel.text = @"Overrides surface grays with absolute black";
-
-            ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
-            sw.on = tm.oledBlackEnabled;
-            [sw addTarget:self action:@selector(oledToggled:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = sw;
-        } else if (indexPath.row == 2) {
-            NSDictionary *dict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
-            cell.textLabel.text = LOC(@"OLED_DARK_KEYBOARD");
-            cell.detailTextLabel.text = LOC(@"OLED_DARK_KEYBOARD_DESC");
-
-            ABCSwitch *sw = [[NSClassFromString(@"ABCSwitch") alloc] init];
-            sw.onTintColor = [UIColor colorWithRed:30.0/255.0 green:150.0/255.0 blue:245.0/255.0 alpha:1.0];
-            sw.on = [dict[@"oledKeyboard"] boolValue];
-            [sw addTarget:self action:@selector(keyboardToggled:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = sw;
-        }
+        cell.imageView.image = [self swatchImageWithPrimary:pal.a1 secondary:pal.b1];
+    } else if (indexPath.section == 3) {
+        NSDictionary *dict = [d dictionaryForKey:@"YTMUltimate"];
+        cell.textLabel.text = @"OLED Dark Keyboard";
+        cell.detailTextLabel.text = @"Force black system keyboard";
+        cell.accessoryView = [self makeSwitchWithOn:[dict[@"oledKeyboard"] boolValue] action:@selector(keyboardToggled:)];
     }
 
     return cell;
@@ -189,54 +181,84 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
 
-    ThemeManager *tm = [ThemeManager sharedManager];
-
-    if (indexPath.section == 0) {
-        tm.isStaticMode = NO;
-        tm.liquidTheme = (YTMLiquidThemePreset)indexPath.row;
-        [tm saveSettings];
-        [self.tableView reloadData];
-    } else if (indexPath.section == 1 && indexPath.row > 0) {
-        tm.isStaticMode = YES;
-        NSInteger staticPreset = (indexPath.row - 1) + YTMLiquidThemeStaticCherry;
-        tm.liquidTheme = (YTMLiquidThemePreset)staticPreset;
-        [tm saveSettings];
-        [self.tableView reloadData];
+    if (indexPath.section == 1) {
+        NSString *name = LGPalette.presetNames[indexPath.row];
+        [d setObject:name forKey:@"LG_theme"];
+        [d setObject:@"liquid" forKey:@"LG_style"];
+        [d setBool:NO forKey:@"LG_static"];
+        [d setBool:NO forKey:@"LG_ambient"];
+        [d synchronize];
+        [LGTheme.shared reload];
+    } else if (indexPath.section == 2) {
+        NSString *name = LGPalette.staticNames[indexPath.row];
+        [d setObject:name forKey:@"LG_static_theme"];
+        [d setObject:@"static" forKey:@"LG_style"];
+        [d setBool:YES forKey:@"LG_static"];
+        [d setBool:NO forKey:@"LG_ambient"];
+        [d synchronize];
+        [LGTheme.shared reload];
     }
 }
 
 #pragma mark - Actions
 
-- (void)staticModeToggled:(UISwitch *)sender {
-    [ThemeManager sharedManager].isStaticMode = sender.isOn;
-    [[ThemeManager sharedManager] saveSettings];
-    [self.tableView reloadData];
+- (void)styleChanged:(UISegmentedControl *)sender {
+    BOOL isStatic = (sender.selectedSegmentIndex == 1);
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setObject:(isStatic ? @"static" : @"liquid") forKey:@"LG_style"];
+    [d setBool:isStatic forKey:@"LG_static"];
+    [d synchronize];
+    [LGTheme.shared reload];
 }
 
-- (void)lightModeToggled:(UISwitch *)sender {
-    [ThemeManager sharedManager].isLightMode = sender.isOn;
-    [[ThemeManager sharedManager] saveSettings];
-    [self.tableView reloadData];
+- (void)ambientToggled:(UISwitch *)sender {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:sender.isOn forKey:@"LG_ambient"];
+    [d synchronize];
+    [LGTheme.shared reload];
 }
 
-- (void)oledToggled:(UISwitch *)sender {
-    [ThemeManager sharedManager].oledBlackEnabled = sender.isOn;
-    [[ThemeManager sharedManager] saveSettings];
+- (void)darkToggled:(UISwitch *)sender {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:sender.isOn forKey:@"LG_dark"];
+    [d synchronize];
+    [LGTheme.shared reload];
+}
+
+- (void)fadeChanged:(UISlider *)sender {
+    double snapped = round(sender.value * 5.0) / 5.0;
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setDouble:snapped forKey:@"LG_fade"];
+    [d synchronize];
+    [LGTheme.shared reload];
+}
+
+- (void)videoToggled:(UISwitch *)sender {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:sender.isOn forKey:@"LG_video"];
+    [d synchronize];
+    [LGTheme.shared reload];
 }
 
 - (void)keyboardToggled:(UISwitch *)sender {
-    NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"]];
+    NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[NSUserDefaults.standardUserDefaults dictionaryForKey:@"YTMUltimate"]];
     dict[@"oledKeyboard"] = @(sender.isOn);
-    [[NSUserDefaults standardUserDefaults] setObject:dict forKey:@"YTMUltimate"];
+    [NSUserDefaults.standardUserDefaults setObject:dict forKey:@"YTMUltimate"];
+    [NSUserDefaults.standardUserDefaults synchronize];
 }
 
-- (UIImage *)imageFromView:(UIView *)view {
-    UIGraphicsBeginImageContextWithOptions(view.bounds.size, NO, 0.0);
-    [view.layer renderInContext:UIGraphicsGetCurrentContext()];
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
+- (UIImage *)swatchImageWithPrimary:(UIColor *)c1 secondary:(UIColor *)c2 {
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(24, 24)];
+    return [r imageWithActions:^(__unused UIGraphicsImageRendererContext *ctx) {
+        UIBezierPath *circle = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(1, 1, 22, 22)];
+        [c2 ?: UIColor.darkGrayColor setFill];
+        [circle fill];
+        UIBezierPath *inner = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(4, 4, 16, 16)];
+        [c1 ?: UIColor.whiteColor setFill];
+        [inner fill];
+    }];
 }
 
 @end

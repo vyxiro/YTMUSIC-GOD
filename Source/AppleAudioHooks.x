@@ -3,8 +3,10 @@
 #import <objc/message.h>
 #import "AudioCrossfadeManager.h"
 #import "NetworkBufferOptimizer.h"
+#import "LiquidGlass.h"
 #import "ThemeManager.h"
 #import "AmbientView.h"
+#import <objc/runtime.h>
 #import "Headers/YTPlayerViewController.h"
 #import "Headers/YTPlayerResponse.h"
 #import "Headers/YTIPlayerResponse.h"
@@ -169,25 +171,55 @@ static AmbientView *gBrowseAmbientView = nil;
 
 #pragma mark - Browse Liquid Glass Backdrop
 
+@interface LGObserverBox : NSObject
+@property (nonatomic, strong) id token;
+@end
+@implementation LGObserverBox
+- (void)dealloc {
+    if (_token) [[NSNotificationCenter defaultCenter] removeObserver:_token];
+}
+@end
+
+static char kLGViewObserverKey;
+static void LGRegisterViewForPaletteUpdates(UIView *view, void (^onChange)(UIView *v)) {
+    if (!view || objc_getAssociatedObject(view, &kLGViewObserverKey)) return;
+    LGObserverBox *box = [LGObserverBox new];
+    __weak UIView *weakView = view;
+    box.token = [[NSNotificationCenter defaultCenter] addObserverForName:LGPaletteDidChangeNotification
+                                                                  object:nil
+                                                                   queue:[NSOperationQueue mainQueue]
+                                                              usingBlock:^(__unused NSNotification *note) {
+        UIView *strongView = weakView;
+        if (strongView && onChange) onChange(strongView);
+    }];
+    objc_setAssociatedObject(view, &kLGViewObserverKey, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 @interface YTMActionRowView : UIView
 @end
 
 %hook YTMActionRowView
 - (void)layoutSubviews {
     %orig;
-    if (![ThemeManager sharedManager].isStaticMode) {
-        self.backgroundColor = [UIColor clearColor];
-        for (UIView *sub in self.subviews) {
-            sub.backgroundColor = [UIColor clearColor];
-            if ([sub isKindOfClass:[UIScrollView class]]) {
-                for (UIView *btn in sub.subviews) {
-                    if ([btn isKindOfClass:[UIButton class]] || [btn isKindOfClass:%c(MDCButton)]) {
-                        btn.backgroundColor = [[ThemeManager sharedManager] glassBackgroundColor];
-                        btn.layer.cornerRadius = 18.0f;
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    LGTheme *t = LGTheme.shared;
+    self.backgroundColor = [UIColor clearColor];
+    for (UIView *sub in self.subviews) {
+        sub.backgroundColor = [UIColor clearColor];
+        if ([sub isKindOfClass:[UIScrollView class]]) {
+            for (UIView *btn in sub.subviews) {
+                if ([btn isKindOfClass:[UIButton class]] || [btn isKindOfClass:%c(MDCButton)]) {
+                    if (t.staticMode) {
+                        btn.backgroundColor = t.palette.b2;
                         btn.layer.borderWidth = 1.0f;
-                        btn.layer.borderColor = [[ThemeManager sharedManager] glassBorderColor].CGColor;
-                        btn.clipsToBounds = YES;
+                        btn.layer.borderColor = [UIColor colorWithWhite:0.5f alpha:0.35f].CGColor;
+                    } else {
+                        btn.backgroundColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.09f : 0.55f)];
+                        btn.layer.borderWidth = 1.0f;
+                        btn.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:(t.dark ? 0.20f : 0.80f)].CGColor;
                     }
+                    btn.layer.cornerRadius = 18.0f;
+                    btn.clipsToBounds = YES;
                 }
             }
         }
@@ -199,19 +231,15 @@ static AmbientView *gBrowseAmbientView = nil;
 
 - (void)viewDidLoad {
     %orig;
-    if (![ThemeManager sharedManager].isStaticMode) {
-        AmbientView *ambient = [[AmbientView alloc] initWithFrame:self.view.bounds];
-        ambient.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [self.view insertSubview:ambient atIndex:0];
-        self.view.backgroundColor = [UIColor clearColor];
-    }
+    AmbientView *ambient = [[AmbientView alloc] initWithFrame:self.view.bounds];
+    ambient.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view insertSubview:ambient atIndex:0];
+    self.view.backgroundColor = [UIColor clearColor];
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (![ThemeManager sharedManager].isStaticMode) {
-        self.view.backgroundColor = [UIColor clearColor];
-    }
+    self.view.backgroundColor = [UIColor clearColor];
 }
 
 %end
@@ -238,16 +266,21 @@ static AmbientView *gBrowseAmbientView = nil;
 
 #pragma mark - Dynamic Theme Accent Hooks
 
+static void LGApplySliderPalette(UISlider *slider) {
+    LGPalette *p = LGTheme.shared.palette;
+    if (p.a1) slider.minimumTrackTintColor = p.a1;
+    if (p.tx) slider.thumbTintColor = p.tx;
+}
+
 %hook UISlider
 
 - (void)didMoveToWindow {
     %orig;
-    if (self.window && ![ThemeManager sharedManager].isStaticMode) {
-        UIColor *accent = [[ThemeManager sharedManager] accentColor1];
-        if (accent) {
-            self.minimumTrackTintColor = accent;
-            self.thumbTintColor = accent;
-        }
+    if (self.window) {
+        LGApplySliderPalette(self);
+        LGRegisterViewForPaletteUpdates(self, ^(UIView *v) {
+            if ([v isKindOfClass:[UISlider class]]) LGApplySliderPalette((UISlider *)v);
+        });
     }
 }
 
@@ -257,13 +290,16 @@ static AmbientView *gBrowseAmbientView = nil;
 
 - (void)layoutSubviews {
     %orig;
-    if (![ThemeManager sharedManager].isStaticMode && [self respondsToSelector:@selector(navigationButton)]) {
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    if ([self respondsToSelector:@selector(navigationButton)]) {
         UIView *btn = (UIView *)[self performSelector:@selector(navigationButton)];
         if (btn && [btn respondsToSelector:@selector(isSelected)]) {
             BOOL isSel = ((BOOL (*)(id, SEL))objc_msgSend)(btn, @selector(isSelected));
-            if (isSel) {
-                UIColor *accent = [[ThemeManager sharedManager] accentColor1];
-                if (accent) [btn setTintColor:accent];
+            LGPalette *p = LGTheme.shared.palette;
+            if (isSel && p.a1) {
+                [btn setTintColor:p.a1];
+            } else if (!isSel && p.mu) {
+                [btn setTintColor:p.mu];
             }
         }
     }
@@ -275,20 +311,14 @@ static AmbientView *gBrowseAmbientView = nil;
 
 - (void)layoutSubviews {
     %orig;
-    if (![ThemeManager sharedManager].isStaticMode) {
-        self.layer.cornerRadius = 27.0f;
-        self.layer.masksToBounds = NO;
-        self.backgroundColor = [[ThemeManager sharedManager] glassBackgroundColor];
-        self.layer.borderWidth = 1.0f;
-        self.layer.borderColor = [[ThemeManager sharedManager] glassBorderColor].CGColor;
-        self.layer.shadowColor = [UIColor blackColor].CGColor;
-        self.layer.shadowOpacity = 0.35f;
-        self.layer.shadowOffset = CGSizeMake(0, 8);
-        self.layer.shadowRadius = 12.0f;
-        if ([self respondsToSelector:@selector(contentView)]) {
-            UIView *cv = (UIView *)[self performSelector:@selector(contentView)];
-            if (cv) cv.backgroundColor = [UIColor clearColor];
-        }
+    LGRegisterViewForPaletteUpdates(self, ^(UIView *v) { [v setNeedsLayout]; });
+    self.backgroundColor = [UIColor clearColor];
+    self.layer.cornerRadius = 0.0f;
+    self.layer.borderWidth = 0.0f;
+    self.layer.shadowOpacity = 0.0f;
+    if ([self respondsToSelector:@selector(contentView)]) {
+        UIView *cv = (UIView *)[self performSelector:@selector(contentView)];
+        if (cv) cv.backgroundColor = [UIColor clearColor];
     }
 }
 

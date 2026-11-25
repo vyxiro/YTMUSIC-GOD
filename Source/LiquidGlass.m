@@ -1,6 +1,6 @@
-// LiquidGlass.m - values copied from the HTML sheet (CSS px -> iOS pt at the call site).
-// Plain Objective-C, ARC enabled, thread-safe.
+// LiquidGlass.m  v2  - Merged with v1 ARC/thread-safety/nil-guards + temporary diagnostics.
 #import "LiquidGlass.h"
+#import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
 #include <stdlib.h>
@@ -8,448 +8,427 @@
 NSString *const LGPaletteDidChangeNotification = @"LGPaletteDidChangeNotification";
 static const NSInteger kLGBgTag = 0x4C47, kLGGlassTag = 0x4C48;
 
+#pragma mark - colour helpers
 static UIColor *LGHex(NSString *h) {
-    if (!h || h.length < 2) return [UIColor clearColor];
-    unsigned v = 0;
-    [[NSScanner scannerWithString:[h substringFromIndex:1]] scanHexInt:&v];
-    return [UIColor colorWithRed:((v >> 16) & 255) / 255.0
-                           green:((v >> 8) & 255) / 255.0
-                            blue:(v & 255) / 255.0
-                           alpha:1.0];
+    if (![h isKindOfClass:NSString.class] || h.length < 2) return [UIColor clearColor];
+    unsigned v = 0; [[NSScanner scannerWithString:[h substringFromIndex:1]] scanHexInt:&v];
+    return [UIColor colorWithRed:((v >> 16) & 255) / 255.0 green:((v >> 8) & 255) / 255.0 blue:(v & 255) / 255.0 alpha:1];
 }
-
-static inline CGFloat LGClamp(CGFloat x, CGFloat lo, CGFloat hi) {
-    return MAX(lo, MIN(hi, x));
-}
-
-static inline UIColor *LGHSB(CGFloat h, CGFloat s, CGFloat b) {
-    return [UIColor colorWithHue:fmod(h + 1.0, 1.0)
-                      saturation:LGClamp(s, 0, 1)
-                      brightness:LGClamp(b, 0, 1)
-                           alpha:1.0];
-}
-
-// ============================ LGPalette ============================
-@implementation LGPalette
-
-// order: b1, b2, a1, a2, tx, mu  (exactly the sheet's T[] data)
-+ (NSArray *)data {
-    return @[
-     @{@"n":@"Aurora Teal",
-       @"d":@[@"#06191c",@"#0b2e33",@"#19d3b0",@"#3a7bff",@"#eafffb",@"#8fb8b3"],
-       @"l":@[@"#eefbf9",@"#d3f2ee",@"#0aa88a",@"#5b9bff",@"#08302b",@"#4f7a74"]},
-     @{@"n":@"Nebula Violet",
-       @"d":@[@"#110a24",@"#241346",@"#9a7bff",@"#ff5fb0",@"#f4efff",@"#a99cc8"],
-       @"l":@[@"#f5f1ff",@"#e4dbff",@"#6a47ee",@"#ff7ab8",@"#241346",@"#6b5d92"]},
-     @{@"n":@"Mars Rust",
-       @"d":@[@"#1c0b07",@"#3a1710",@"#ff6a3d",@"#ffb347",@"#fff1ea",@"#c29a8c"],
-       @"l":@[@"#fff3ec",@"#ffdccc",@"#e24a1a",@"#ff9f43",@"#3a1710",@"#92604f"]},
-     @{@"n":@"Ion Blue",
-       @"d":@[@"#060d1f",@"#0e1f47",@"#3d8bff",@"#29e0ff",@"#ecf3ff",@"#8fa6cf"],
-       @"l":@[@"#eef4ff",@"#d3e3ff",@"#1a63e0",@"#27b9e6",@"#0e1f47",@"#566b96"]},
-     @{@"n":@"Solar Amber",
-       @"d":@[@"#1a1204",@"#33220a",@"#ffc21f",@"#ff6f91",@"#fff8e6",@"#c7b283"],
-       @"l":@[@"#fffaea",@"#ffecb8",@"#e09a00",@"#ff7a98",@"#33220a",@"#8b7440"]}
-    ];
-}
-
-+ (NSArray<NSString *> *)presetNames {
-    NSMutableArray *a = [NSMutableArray array];
-    for (NSDictionary *d in [self data]) {
-        [a addObject:d[@"n"]];
+static NSString *LGColorHex(UIColor *c) {
+    if (!c) return @"#nil";
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if ([c getRed:&r green:&g blue:&b alpha:&a]) {
+        return [NSString stringWithFormat:@"#%02X%02X%02X", (int)round(r * 255), (int)round(g * 255), (int)round(b * 255)];
     }
-    return a;
+    return @"#nonRGB";
+}
+static inline CGFloat LGClamp(CGFloat x, CGFloat lo, CGFloat hi) { return MAX(lo, MIN(hi, x)); }
+static UIColor *LGHSB(CGFloat h, CGFloat s, CGFloat b) {
+    h = h - floor(h);
+    return [UIColor colorWithHue:h saturation:LGClamp(s, 0, 1) brightness:LGClamp(b, 0, 1) alpha:1];
+}
+static CGFloat LGLin(CGFloat c) { return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+static CGFloat LGLum(UIColor *c) {
+    CGFloat r = 0, g = 0, b = 0; [c getRed:&r green:&g blue:&b alpha:NULL];
+    return .2126 * LGLin(r) + .7152 * LGLin(g) + .0722 * LGLin(b);
+}
+static CGFloat LGContrast(UIColor *a, UIColor *b) {
+    CGFloat la = LGLum(a), lb = LGLum(b); if (la < lb) { CGFloat t = la; la = lb; lb = t; }
+    return (la + .05) / (lb + .05);
+}
+static UIColor *LGMix(UIColor *a, UIColor *b, CGFloat t) {
+    CGFloat ar, ag, ab, br, bg, bb; [a getRed:&ar green:&ag blue:&ab alpha:NULL]; [b getRed:&br green:&bg blue:&bb alpha:NULL];
+    return [UIColor colorWithRed:ar + (br - ar) * t green:ag + (bg - ag) * t blue:ab + (bb - ab) * t alpha:1];
+}
+// Keep accents readable on the background (WCAG-style ratio) without changing hue.
+static UIColor *LGFixAccent(CGFloat h, CGFloat s, CGFloat v, UIColor *bg, CGFloat target, BOOL dark) {
+    for (int i = 0; i < 24; i++) {
+        UIColor *c = LGHSB(h, s, v);
+        if (LGContrast(c, bg) >= target) return c;
+        if (dark) { if (s > .3) s -= .05; else v = MIN(1, v + .02); }
+        else { v -= .03; if (v < .3) break; }
+    }
+    return LGHSB(h, s, v);
+}
+// Second accent when the art has only one strong hue: ~25 deg away, never muddy yellow-green.
+static CGFloat LGAnalog(CGFloat h1) {
+    CGFloat h2 = fmod(h1 + .07, 1.0);
+    if (h2 >= .17 && h2 <= .45 && !(h1 >= .17 && h1 <= .45)) h2 = fmod(h1 - .07 + 1.0, 1.0);
+    return h2;
 }
 
-+ (LGPalette *)presetNamed:(NSString *)name dark:(BOOL)dark {
-    NSDictionary *hit = nil;
-    for (NSDictionary *d in [self data]) {
-        if ([d[@"n"] isEqualToString:name]) {
-            hit = d;
-            break;
-        }
+#pragma mark - image helpers
+static BOOL LGDrawSmall(UIImage *img, int N, uint8_t *buf) {
+    if (!img) return NO;
+    CGImageRef cg = img.CGImage;
+    UIImage *rendered = nil;
+    if (!cg) {
+        UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
+        fmt.scale = 1.0;
+        rendered = [[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(N, N) format:fmt] imageWithActions:^(__unused UIGraphicsImageRendererContext *ctx) {
+            [img drawInRect:CGRectMake(0, 0, N, N)];
+        }];
+        cg = rendered.CGImage;
     }
-    if (!hit) hit = [self data][0];
-    NSArray *c = hit[dark ? @"d" : @"l"];
-    LGPalette *p = [LGPalette new];
-    p.name = hit[@"n"];
-    p.b1 = LGHex(c[0]);
-    p.b2 = LGHex(c[1]);
-    p.a1 = LGHex(c[2]);
-    p.a2 = LGHex(c[3]);
-    p.tx = LGHex(c[4]);
-    p.mu = LGHex(c[5]);
-    return p;
-}
-
-// Ambient mode: dominant hue -> a1, a distant hue -> a2, backgrounds derived from a1's hue.
-+ (LGPalette *)paletteFromArtwork:(UIImage *)image dark:(BOOL)dark {
-    if (!image) return nil;
-    enum { N = 24, K = 12 };
-    uint8_t px[N * N * 4];
-    memset(px, 0, sizeof(px));
-
-    CGImageRef cgImage = image.CGImage;
-    BOOL freeCg = NO;
-    if (!cgImage) {
-        UIGraphicsBeginImageContextWithOptions(CGSizeMake(N, N), NO, 1.0);
-        [image drawInRect:CGRectMake(0, 0, N, N)];
-        UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-        cgImage = rendered.CGImage;
-    }
-    if (!cgImage) return nil;
-
+    if (!cg) return NO;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(px, N, N, 8, N * 4, cs, kCGImageAlphaPremultipliedLast);
-    CGColorSpaceRelease(cs);
-    if (!ctx) return nil;
-    CGContextDrawImage(ctx, CGRectMake(0, 0, N, N), cgImage);
-    CGContextRelease(ctx);
-    if (freeCg && cgImage) CGImageRelease(cgImage);
+    CGContextRef ctx = CGBitmapContextCreate(buf, N, N, 8, N * 4, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs); if (!ctx) return NO;
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationMedium);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, N, N), cg);
+    CGContextRelease(ctx); return YES;
+}
+static NSString *LGSignature(UIImage *img) {          // cheap content hash: placeholder vs real art
+    uint8_t px[4 * 4 * 4] = {0}; if (!LGDrawSmall(img, 4, px)) return @"0";
+    uint32_t h = 2166136261u; for (int i = 0; i < 64; i++) { h ^= px[i]; h *= 16777619u; }
+    return [NSString stringWithFormat:@"%08x", h];
+}
+static BOOL LGImageIsBlack(UIImage *img) {
+    uint8_t px[8 * 8 * 4] = {0}; if (!LGDrawSmall(img, 8, px)) return YES;
+    double s = 0; for (int i = 0; i < 64; i++) s += MAX(px[i*4], MAX(px[i*4+1], px[i*4+2])) / 255.0;
+    return (s / 64.0) < 0.03;
+}
 
-    double wt[K] = {0}, hh[K] = {0}, ss[K] = {0};
-    for (int i = 0; i < N * N; i++) {
-        uint8_t a = px[i * 4 + 3];
-        if (a < 200) continue;
-        UIColor *c = [UIColor colorWithRed:px[i * 4] / 255.0
-                                     green:px[i * 4 + 1] / 255.0
-                                      blue:px[i * 4 + 2] / 255.0
-                                     alpha:1.0];
-        CGFloat h = 0, s = 0, b = 0;
-        [c getHue:&h saturation:&s brightness:&b alpha:NULL];
-        if (b < 0.15 || s < 0.15) continue; // ignore near-black / grey
-        double w = s * s * b;
-        int k = MAX(0, MIN(K - 1, (int)(h * K)));
-        wt[k] += w;
-        hh[k] += w * h;
-        ss[k] += w * s;
-    }
-
-    int i1 = 0;
-    for (int k = 1; k < K; k++) {
-        if (wt[k] > wt[i1]) i1 = k;
-    }
-    if (wt[i1] < 0.5) return nil; // greyscale art: keep previous palette
-
-    int i2 = -1;
-    double best = 0;
-    for (int k = 0; k < K; k++) {
-        int dist = MIN(abs(k - i1), K - abs(k - i1));
-        if (dist >= 2 && wt[k] > best) {
-            best = wt[k];
-            i2 = k;
-        }
-    }
-    CGFloat h1 = hh[i1] / wt[i1];
-    CGFloat s1 = ss[i1] / wt[i1];
-    CGFloat h2 = (i2 >= 0 && best > wt[i1] * 0.15) ? (hh[i2] / wt[i2]) : (h1 + 0.08);
-    CGFloat s2 = (i2 >= 0 && best > wt[i1] * 0.15) ? (ss[i2] / wt[i2]) : s1;
-
-    LGPalette *p = [LGPalette new];
-    p.name = @"Ambient";
-    if (dark) {
-        p.a1 = LGHSB(h1, LGClamp(s1, .55, .9), .95);
-        p.a2 = LGHSB(h2, LGClamp(s2, .55, .9), .95);
-        p.b1 = LGHSB(h1, LGClamp(s1, .5, .85), .09);
-        p.b2 = LGHSB(h1, LGClamp(s1, .5, .80), .18);
-        p.tx = LGHSB(h1, .06, .97);
-        p.mu = LGHSB(h1, .20, .72);
+#pragma mark - LGPalette
+struct LGHist { double w[36], ws[36], wv[36], wc[36], wsn[36]; };
+static void LGPeak(const struct LGHist *H, int p, CGFloat *h, CGFloat *s, CGFloat *v) {
+    double W = 0, S = 0, V = 0, C = 0, SN = 0;
+    for (int d = -1; d <= 1; d++) { int k = (p + d + 36) % 36; W += H->w[k]; S += H->ws[k]; V += H->wv[k]; C += H->wc[k]; SN += H->wsn[k]; }
+    if (W <= 0) { *h = 0; *s = .7; *v = .9; return; }
+    double hh = atan2(SN, C) / (2 * M_PI); if (hh < 0) hh += 1;
+    *h = hh; *s = S / W; *v = V / W;
+}
+static LGPalette *LGBuild(CGFloat h1, CGFloat s1, CGFloat v1, CGFloat h2, CGFloat s2, CGFloat v2, BOOL dark) {
+    LGPalette *p = [LGPalette new]; p.name = @"Ambient";
+    if (dark) {   // proportions taken from the sheet's dark presets
+        CGFloat bgs = LGClamp(s1 * .95, .5, .85);
+        p.b1 = LGHSB(h1, bgs, .105); p.b2 = LGHSB(h1, bgs * .97, .20);
+        p.a1 = LGFixAccent(h1, LGClamp(s1 * 1.12, .55, .95), LGClamp(v1 + .12, .90, 1.0), p.b1, 4.5, YES);
+        p.a2 = LGFixAccent(h2, LGClamp(s2 * 1.10, .50, .92), LGClamp(v2 + .12, .90, 1.0), p.b1, 3.0, YES);
+        p.tx = LGHSB(h1, .08, 1.0); p.mu = LGHSB(h1, .22, .72);
     } else {
-        p.a1 = LGHSB(h1, LGClamp(s1, .6, .9), .80);
-        p.a2 = LGHSB(h2, LGClamp(s2, .5, .85), .92);
-        p.b1 = LGHSB(h1, .06, .98);
-        p.b2 = LGHSB(h1, .17, .92);
-        p.tx = LGHSB(h1, .70, .18);
-        p.mu = LGHSB(h1, .35, .42);
+        p.b1 = LGHSB(h1, .05, .98); p.b2 = LGHSB(h1, .14, .95);
+        p.a1 = LGFixAccent(h1, LGClamp(s1, .6, .95), LGClamp(v1, .62, .80), p.b1, 3.0, NO);
+        p.a2 = LGHSB(h2, LGClamp(s2, .45, .8), LGClamp(v2, .85, 1.0));
+        p.tx = LGHSB(h1, .80, .19); p.mu = LGHSB(h1, .35, .48);
     }
+    p.onAccent = LGContrast(UIColor.whiteColor, p.a1) >= 3.0 ? UIColor.whiteColor : LGHSB(h1, .8, .12);
     return p;
+}
+static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale covers
+    LGPalette *p = [LGPalette new]; p.name = @"Ambient";
+    if (dark) { p.a1 = LGHSB(h, .08, .90); p.a2 = LGHSB(h, .10, .72); p.b1 = LGHSB(h, .20, .09); p.b2 = LGHSB(h, .18, .18); p.tx = LGHSB(h, .04, 1); p.mu = LGHSB(h, .10, .72); }
+    else      { p.a1 = LGHSB(h, .10, .38); p.a2 = LGHSB(h, .10, .55); p.b1 = LGHSB(h, .03, .98); p.b2 = LGHSB(h, .06, .93); p.tx = LGHSB(h, .30, .15); p.mu = LGHSB(h, .15, .42); }
+    p.onAccent = LGContrast(UIColor.whiteColor, p.a1) >= 3.0 ? UIColor.whiteColor : p.b1;
+    return p;
+}
+
+@implementation LGPalette
++ (NSArray *)liquidData {   // b1, b2, a1, a2, tx, mu : copied from the sheet
+    return @[
+     @{@"n":@"Aurora Teal",   @"d":@[@"#06191c",@"#0b2e33",@"#19d3b0",@"#3a7bff",@"#eafffb",@"#8fb8b3"], @"l":@[@"#eefbf9",@"#d3f2ee",@"#0aa88a",@"#5b9bff",@"#08302b",@"#4f7a74"]},
+     @{@"n":@"Nebula Violet", @"d":@[@"#110a24",@"#241346",@"#9a7bff",@"#ff5fb0",@"#f4efff",@"#a99cc8"], @"l":@[@"#f5f1ff",@"#e4dbff",@"#6a47ee",@"#ff7ab8",@"#241346",@"#6b5d92"]},
+     @{@"n":@"Mars Rust",     @"d":@[@"#1c0b07",@"#3a1710",@"#ff6a3d",@"#ffb347",@"#fff1ea",@"#c29a8c"], @"l":@[@"#fff3ec",@"#ffdccc",@"#e24a1a",@"#ff9f43",@"#3a1710",@"#92604f"]},
+     @{@"n":@"Ion Blue",      @"d":@[@"#060d1f",@"#0e1f47",@"#3d8bff",@"#29e0ff",@"#ecf3ff",@"#8fa6cf"], @"l":@[@"#eef4ff",@"#d3e3ff",@"#1a63e0",@"#27b9e6",@"#0e1f47",@"#566b96"]},
+     @{@"n":@"Solar Amber",   @"d":@[@"#1a1204",@"#33220a",@"#ffc21f",@"#ff6f91",@"#fff8e6",@"#c7b283"], @"l":@[@"#fffaea",@"#ffecb8",@"#e09a00",@"#ff7a98",@"#33220a",@"#8b7440"]}];
+}
++ (NSArray *)staticData {   // name, accent, dark bg, light bg : the sheet's P[] array
+    return @[@[@"Cherry Red",@"#FF0000",@"#121212",@"#FFF7F2"], @[@"Midnight Blue",@"#3B5BFF",@"#0B1230",@"#E9F1FF"],
+             @[@"Matcha Green",@"#00C853",@"#0D2E1E",@"#FFF9E6"], @[@"Lavender Haze",@"#8A2BE2",@"#1A0B28",@"#F3E9FF"],
+             @[@"Amber Glow",@"#FF8C00",@"#2A1A0F",@"#FDEBD7"]];
+}
++ (NSArray<NSString *> *)presetNames { NSMutableArray *a = [NSMutableArray array]; for (NSDictionary *d in [self liquidData]) [a addObject:d[@"n"]]; return a; }
++ (NSArray<NSString *> *)staticNames { NSMutableArray *a = [NSMutableArray array]; for (NSArray *d in [self staticData]) [a addObject:d[0]]; return a; }
++ (LGPalette *)presetNamed:(NSString *)name dark:(BOOL)dark {
+    NSDictionary *hit = nil; for (NSDictionary *d in [self liquidData]) if ([d[@"n"] isEqualToString:name]) { hit = d; break; }
+    if (!hit) hit = [self liquidData][0];
+    NSArray *c = hit[dark ? @"d" : @"l"]; LGPalette *p = [LGPalette new]; p.name = hit[@"n"];
+    p.b1 = LGHex(c[0]); p.b2 = LGHex(c[1]); p.a1 = LGHex(c[2]); p.a2 = LGHex(c[3]); p.tx = LGHex(c[4]); p.mu = LGHex(c[5]);
+    p.onAccent = LGContrast(UIColor.whiteColor, p.a1) >= 3.0 ? UIColor.whiteColor : p.b1;   // sheet uses white; amber needs dark
+    return p;
+}
++ (LGPalette *)staticNamed:(NSString *)name dark:(BOOL)dark {
+    NSArray *hit = nil; for (NSArray *d in [self staticData]) if ([d[0] isEqualToString:name]) { hit = d; break; }
+    if (!hit) hit = [self staticData][0];
+    LGPalette *p = [LGPalette new]; p.name = hit[0];
+    p.a1 = p.a2 = LGHex(hit[1]); p.b1 = LGHex(dark ? hit[2] : hit[3]);
+    p.b2 = LGMix(p.b1, dark ? UIColor.whiteColor : UIColor.blackColor, dark ? .07 : .05);
+    p.tx = dark ? LGHex(@"#f6f6f8") : LGHex(@"#17171b"); p.mu = dark ? LGHex(@"#c2c2ca") : LGHex(@"#5f5f6a");
+    p.onAccent = LGContrast(UIColor.whiteColor, p.a1) >= 3.0 ? UIColor.whiteColor : p.b1;
+    return p;
+}
+// Any colour: 36-bin hue histogram, weighted by chroma, smoothed; two peaks; neutral fallback for B&W art.
++ (LGPalette *)paletteFromImage:(UIImage *)image dark:(BOOL)dark {
+    enum { N = 32 }; uint8_t px[N * N * 4];
+    if (!LGDrawSmall(image, N, px)) return nil;
+    struct LGHist H; memset(&H, 0, sizeof H);
+    int valid = 0, colourful = 0; double sr = 0, sg = 0, sb = 0;
+    for (int i = 0; i < N * N; i++) {
+        double a = px[i*4+3]; if (a < 200) continue;
+        double r = MIN(1.0, px[i*4] / a), g = MIN(1.0, px[i*4+1] / a), b = MIN(1.0, px[i*4+2] / a);
+        valid++; sr += r; sg += g; sb += b;
+        CGFloat h = 0, s = 0, v = 0;
+        [[UIColor colorWithRed:r green:g blue:b alpha:1] getHue:&h saturation:&s brightness:&v alpha:NULL];
+        if (v < .12 || s < .18) continue;                       // letterbox black / grey
+        colourful++;
+        double wt = pow(s, 1.5) * (.35 + .65 * v); int k = MAX(0, MIN(35, (int)(h * 36)));
+        H.w[k] += wt; H.ws[k] += wt * s; H.wv[k] += wt * v; H.wc[k] += wt * cos(2 * M_PI * h); H.wsn[k] += wt * sin(2 * M_PI * h);
+    }
+    if (valid < 64) return nil;
+    if (colourful < valid * .05) {
+        CGFloat h0 = 0, s0 = 0; [[UIColor colorWithRed:sr / valid green:sg / valid blue:sb / valid alpha:1] getHue:&h0 saturation:&s0 brightness:NULL alpha:NULL];
+        return LGNeutral(s0 > .05 ? h0 : .60, dark);
+    }
+    double sm[36]; int p1 = 0;
+    for (int k = 0; k < 36; k++) { sm[k] = H.w[k] + .5 * (H.w[(k + 35) % 36] + H.w[(k + 1) % 36]); if (sm[k] > sm[p1]) p1 = k; }
+    CGFloat h1, s1, v1, h2, s2, v2; LGPeak(&H, p1, &h1, &s1, &v1);
+    int p2 = -1; double best = -1;
+    for (int k = 0; k < 36; k++) {
+        int d = MIN((k - p1 + 36) % 36, (p1 - k + 36) % 36);
+        if (d >= 4 && d <= 7 && sm[k] >= .40 * sm[p1] && sm[k] > best) { best = sm[k]; p2 = k; }
+    }
+    if (p2 >= 0) LGPeak(&H, p2, &h2, &s2, &v2); else { h2 = LGAnalog(h1); s2 = s1; v2 = v1; }
+    if (p2 >= 0 && h2 >= .17 && h2 <= .45 && !(h1 >= .17 && h1 <= .45)) { h2 = LGAnalog(h1); s2 = s1; v2 = v1; }
+    return LGBuild(h1, s1, v1, h2, s2, v2, dark);
 }
 @end
 
-// ============================ LGTheme ============================
+#pragma mark - LGTheme
 @implementation LGTheme {
-    LGPalette *_art;
+    LGPalette *_art; UIImage *_lastImage; NSString *_lastKey; BOOL _artDark;
+    NSDate *_lastVideoApply; int _blackStreak; BOOL _videoUnsupported;
 }
-+ (LGTheme *)shared {
-    static LGTheme *t;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        t = [LGTheme new];
-        [t reloadSilently];
-    });
-    return t;
-}
-
++ (LGTheme *)shared { static LGTheme *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [LGTheme new]; [t reloadSilently]; }); return t; }
 - (void)reloadSilently {
     @synchronized(self) {
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
         _dark = [d objectForKey:@"LG_dark"] ? [d boolForKey:@"LG_dark"] : YES;
+        NSString *styleStr = [d stringForKey:@"LG_style"];
+        BOOL styleStatic = styleStr ? [styleStr isEqualToString:@"static"] : [d boolForKey:@"LG_static"];
+        _staticMode = styleStatic || UIAccessibilityIsReduceTransparencyEnabled();
         _ambient = [d boolForKey:@"LG_ambient"];
-        _staticMode = [d boolForKey:@"LG_static"] || UIAccessibilityIsReduceTransparencyEnabled();
-        LGPalette *preset = [LGPalette presetNamed:([d stringForKey:@"LG_theme"] ?: @"Aurora Teal") dark:_dark];
-        _palette = (_ambient && _art) ? _art : preset;
+        _fadeDuration = LGClamp([d objectForKey:@"LG_fade"] ? [d doubleForKey:@"LG_fade"] : 1.8, 0, 4);
+        if (_ambient && _lastImage && (!_art || _artDark != _dark)) {       // dark/light toggled: recompute (about 1 ms)
+            LGPalette *p = [LGPalette paletteFromImage:_lastImage dark:_dark]; if (p) { _art = p; _artDark = _dark; }
+        }
+        LGPalette *base = styleStatic ? [LGPalette staticNamed:([d stringForKey:@"LG_static_theme"] ?: @"Cherry Red") dark:_dark]
+                                      : [LGPalette presetNamed:([d stringForKey:@"LG_theme"] ?: @"Aurora Teal") dark:_dark];
+        _palette = (_ambient && _art) ? _art : base;
     }
 }
-
 - (void)reload {
     [self reloadSilently];
-    if ([NSThread isMainThread]) {
-        [NSNotificationCenter.defaultCenter postNotificationName:LGPaletteDidChangeNotification object:nil];
-    } else {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [NSNotificationCenter.defaultCenter postNotificationName:LGPaletteDidChangeNotification object:nil];
-        });
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:LGPaletteDidChangeNotification object:nil]; });
 }
-
-- (void)setArtwork:(UIImage *)image {
-    if (!_ambient || !image) return;
-    BOOL dark = _dark;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        LGPalette *p = [LGPalette paletteFromArtwork:image dark:dark];
-        if (!p) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @synchronized(self) {
-                self->_art = p;
+- (void)ingestArtwork:(UIImage *)image trackKey:(NSString *)trackKey {
+    if (!image) return;
+    NSString *key = [NSString stringWithFormat:@"%@|%@", trackKey ?: @"", LGSignature(image)];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        BOOL shouldExtract = NO;
+        BOOL dark = YES;
+        @synchronized(self) {
+            if (![key isEqualToString:self->_lastKey]) {
+                self->_lastKey = key; self->_lastImage = image; self->_blackStreak = 0;
+                shouldExtract = self->_ambient;
+                dark = self->_dark;
             }
-            [self reload];
+        }
+        if (!shouldExtract) return;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            LGPalette *p = [LGPalette paletteFromImage:image dark:dark];
+            NSLog(@"[LG] ingestArtwork extracted a1=%@ b1=%@ dark=%d key='%@'", LGColorHex(p.a1), LGColorHex(p.b1), dark, trackKey ?: @"");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                @synchronized(self) {
+                    if (!p || ![key isEqualToString:self->_lastKey]) return;
+                    self->_art = p; self->_artDark = dark;
+                }
+                [self reload];
+            });
         });
     });
 }
+- (void)ingestVideoFrame:(UIImage *)frame {   // main thread
+    if (!_ambient || !frame || _videoUnsupported) return;
+    if (LGImageIsBlack(frame)) {              // protected / GPU-only layers often snapshot as black
+        if (++_blackStreak >= 3) { _videoUnsupported = YES; [LGVideoSampler stop]; NSLog(@"[LG] video snapshots are black; using cover art only"); }
+        return;
+    }
+    _blackStreak = 0;
+    NSDate *now = [NSDate date];
+    if (_lastVideoApply && [now timeIntervalSinceDate:_lastVideoApply] < 2.5) return;   // rate limit: no flicker
+    LGPalette *p = [LGPalette paletteFromImage:frame dark:_dark]; if (!p) return;
+    @synchronized(self) {
+        if (_art) {                                                                        // hysteresis: ignore tiny changes
+            CGFloat ar, ag, ab, br, bg, bb; [_art.a1 getRed:&ar green:&ag blue:&ab alpha:NULL]; [p.a1 getRed:&br green:&bg blue:&bb alpha:NULL];
+            if (sqrt((ar-br)*(ar-br) + (ag-bg)*(ag-bg) + (ab-bb)*(ab-bb)) < .12) return;
+        }
+        _lastVideoApply = now; _art = p; _artDark = _dark;
+    }
+    NSLog(@"[LG] ingestVideoFrame usable: extracted a1=%@", LGColorHex(p.a1));
+    [self reload];
+}
 @end
 
-// ============================ LGBackgroundView ============================
-@implementation LGBackgroundView {
-    CAGradientLayer *_base, *_blobA, *_blobB;
-    LGPalette *_pal;
+void LGIngestNowPlayingInfo(NSDictionary *info) {
+    if (![info isKindOfClass:NSDictionary.class]) return;
+    MPMediaItemArtwork *art = info[MPMediaItemPropertyArtwork];
+    NSString *title = info[MPMediaItemPropertyTitle] ?: @"", *artist = info[MPMediaItemPropertyArtist] ?: @"";
+    NSString *ta = [NSString stringWithFormat:@"%@|%@", title, artist];
+    static NSString *lastTA; static NSDate *lastAt; static NSUInteger fireCount = 0;
+    BOOL same = [ta isEqualToString:lastTA];
+    if (!same) fireCount = 0;
+    fireCount++;
+    NSLog(@"[LG] LGIngestNowPlayingInfo (fire #%lu for track): title='%@' artist='%@' artwork=%@",
+          (unsigned long)fireCount, title, artist, art ? @"YES" : @"NO");
+    if (!art) return;
+    if (same && lastAt && [[NSDate date] timeIntervalSinceDate:lastAt] < 1.0) return;   // the app re-posts this dictionary often
+    lastTA = ta; lastAt = [NSDate date];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CGSize s = art.bounds.size; CGFloat side = LGClamp(MIN(s.width, s.height), 64, 300);
+        UIImage *img = [art imageWithSize:CGSizeMake(side, side)];
+        NSLog(@"[LG] LGIngestNowPlayingInfo imageWithSize(%.0f,%.0f) -> %@", side, side, img ? @"YES" : @"NO");
+        if (img) [LGTheme.shared ingestArtwork:img trackKey:ta];
+    });
 }
 
+#pragma mark - LGBackgroundView
+@implementation LGBackgroundView { CAGradientLayer *_base, *_blobA, *_blobB, *_glow; LGPalette *_pal; }
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
-        self.userInteractionEnabled = NO;
-        self.tag = kLGBgTag;
-        _darkStyle = YES;
-        _base = [CAGradientLayer layer];
-        _base.startPoint = CGPointMake(0.41, 0);
-        _base.endPoint = CGPointMake(0.59, 1); // ~170deg
-        for (int i = 0; i < 2; i++) {
-            CAGradientLayer *b = [CAGradientLayer layer];
-            b.type = kCAGradientLayerRadial;
-            b.startPoint = CGPointMake(.5, .5);
-            b.endPoint = CGPointMake(1, 1);
-            if (i == 0) _blobA = b; else _blobB = b;
-        }
-        [self.layer addSublayer:_base];
-        [self.layer addSublayer:_blobA];
-        [self.layer addSublayer:_blobB];
-        [NSNotificationCenter.defaultCenter addObserver:self
-                                               selector:@selector(themeChanged)
-                                                   name:LGPaletteDidChangeNotification
-                                                 object:nil];
+        self.userInteractionEnabled = NO; self.tag = kLGBgTag; _darkStyle = YES;
+        _base = [CAGradientLayer layer]; _base.startPoint = CGPointMake(.41, 0); _base.endPoint = CGPointMake(.59, 1);   // ~170deg
+        CAGradientLayer *ls[3];
+        for (int i = 0; i < 3; i++) { ls[i] = [CAGradientLayer layer]; ls[i].type = kCAGradientLayerRadial; ls[i].startPoint = CGPointMake(.5, .5); ls[i].endPoint = CGPointMake(1, 1); }
+        _blobA = ls[0]; _blobB = ls[1]; _glow = ls[2];
+        _glow.locations = @[@0, @.72];                       // sheet: ellipse 95% 48%, transparent at 72%
+        for (CALayer *l in @[_base, _blobA, _blobB, _glow]) [self.layer addSublayer:l];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(themeChanged) name:LGPaletteDidChangeNotification object:nil];
         [self themeChanged];
     }
     return self;
 }
-
-- (void)dealloc {
-    [NSNotificationCenter.defaultCenter removeObserver:self];
-}
-
-- (void)themeChanged {
-    LGTheme *t = LGTheme.shared;
-    _darkStyle = t.dark;
-    _staticMode = t.staticMode;
-    [self applyPalette:t.palette animated:YES];
-}
-
-- (NSArray *)blobColors:(UIColor *)c {
-    if (!c) c = [UIColor clearColor];
-    return @[
-        (id)c.CGColor,
-        (id)c.CGColor,
-        (id)[c colorWithAlphaComponent:.5].CGColor,
-        (id)[c colorWithAlphaComponent:0].CGColor
-    ];
-}
-
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)themeChanged { LGTheme *t = LGTheme.shared; _darkStyle = t.dark; _staticMode = t.staticMode; [self applyPalette:t.palette animated:YES]; }
+- (NSArray *)blobColors:(UIColor *)c { if (!c) c = [UIColor clearColor]; return @[(id)c.CGColor, (id)c.CGColor, (id)[c colorWithAlphaComponent:.5].CGColor, (id)[c colorWithAlphaComponent:0].CGColor]; }
 - (void)applyPalette:(LGPalette *)p animated:(BOOL)animated {
     if (!p) return;
+    NSString *oldHex = LGColorHex(_pal.a1);
     _pal = p;
-    if (UIAccessibilityIsReduceMotionEnabled()) animated = NO;
-
-    // sheet: .blob opacity .75 / .55 (dark), .5 (light)
-    _blobA.opacity = _darkStyle ? .75 : .5;
-    _blobB.opacity = .5 + (_darkStyle ? .05 : 0);
-    _blobA.hidden = _blobB.hidden = _staticMode;
-
+    NSTimeInterval dur = LGTheme.shared.fadeDuration;
+    BOOL reduceMotion = UIAccessibilityIsReduceMotionEnabled();
+    if (reduceMotion || dur <= 0) animated = NO;
+    _blobA.opacity = _darkStyle ? .75 : .5; _blobB.opacity = _darkStyle ? .55 : .5;
+    _blobA.hidden = _blobB.hidden = _staticMode; _glow.hidden = !_staticMode;
     NSArray *baseC = _staticMode ? @[(id)p.b1.CGColor, (id)p.b1.CGColor] : @[(id)p.b1.CGColor, (id)p.b2.CGColor];
-    NSArray *aC = [self blobColors:p.a1], *bC = [self blobColors:p.a2];
-
+    NSArray *glowC = @[(id)[p.a1 colorWithAlphaComponent:_darkStyle ? .502 : .302].CGColor, (id)[p.a1 colorWithAlphaComponent:0].CGColor];
+    __block BOOL didAddAnim = NO;
     void (^set)(CAGradientLayer *, NSArray *) = ^(CAGradientLayer *l, NSArray *c) {
         if (animated) {
             CABasicAnimation *an = [CABasicAnimation animationWithKeyPath:@"colors"];
-            an.fromValue = ((CAGradientLayer *)(l.presentationLayer ?: l)).colors;
-            an.toValue = c;
-            an.duration = 1.8; // sheet: transition 1.8s ease
+            an.fromValue = ((CAGradientLayer *)(l.presentationLayer ?: l)).colors; an.toValue = c; an.duration = dur;
             an.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [l addAnimation:an forKey:@"lgcolors"];
+            didAddAnim = YES;
         }
         l.colors = c;
     };
-    set(_base, baseC);
-    set(_blobA, aC);
-    set(_blobB, bC);
+    set(_base, baseC); set(_blobA, [self blobColors:p.a1]); set(_blobB, [self blobColors:p.a2]); set(_glow, glowC);
+    NSLog(@"[LG] applyPalette '%@' static=%d dark=%d animated=%d reduceMotion=%d oldA1=%@ newA1=%@ animAdded=%d",
+          p.name, _staticMode, _darkStyle, animated, reduceMotion, oldHex, LGColorHex(p.a1), didAddAnim);
     [self setNeedsLayout];
 }
-
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
-    if (W <= 0 || H <= 0) return;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
+    CGFloat W = self.bounds.size.width, H = self.bounds.size.height; if (W < 1 || H < 1) return;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
     _base.frame = self.bounds;
-    // Sheet geometry in fractions of the 278x588 phone: A r=.377W c=(.838W,.11H); B r=.342W c=(.09W,.604H)
     CAGradientLayer *layers[2] = { _blobA, _blobB };
-    CGFloat R[2]  = { .377 * W, .342 * W };
-    CGFloat CX[2] = { .838 * W, .090 * W };
-    CGFloat CY[2] = { .110 * H, .604 * H };
+    CGFloat R[2] = { .377 * W, .342 * W }, CX[2] = { .838 * W, .090 * W }, CY[2] = { .110 * H, .604 * H };
     for (int i = 0; i < 2; i++) {
-        CGFloat ext = R[i] + 46; // r + ~1.2 x blur(38)
+        CGFloat ext = R[i] + 46;
         layers[i].frame = CGRectMake(CX[i] - ext, CY[i] - ext, ext * 2, ext * 2);
         layers[i].locations = @[@0, @(MAX(.1, (R[i] - 30) / ext)), @(R[i] / ext), @1];
     }
+    _glow.frame = CGRectMake(W / 2 - .95 * W, H / 2 - .48 * H, 1.9 * W, .96 * H);   // radii = 95% W, 48% H
     [CATransaction commit];
 }
 @end
 
-// ============================ LGGlassView ============================
-@implementation LGGlassView {
-    UIView *_clip, *_tint;
-    UIVisualEffectView *_blur;
-    CALayer *_hl;
-}
-
+#pragma mark - LGGlassView
+@implementation LGGlassView { UIView *_clip, *_tint; UIVisualEffectView *_blur; CALayer *_hl; }
 - (instancetype)initWithRadius:(CGFloat)radius dark:(BOOL)dark {
     if ((self = [super initWithFrame:CGRectZero])) {
-        _radius = radius;
-        _darkStyle = dark;
-        self.tag = kLGGlassTag;
-        self.userInteractionEnabled = NO;
-
-        _clip = [UIView new];
-        _clip.clipsToBounds = YES;
-        _clip.layer.borderWidth = 1;
-
-        _blur = [UIVisualEffectView new];
-        _tint = [UIView new];
-        _hl = [CALayer layer];
-
-        [_clip addSubview:_blur];
-        [_clip addSubview:_tint];
-        [_clip.layer addSublayer:_hl];
-        [self addSubview:_clip];
-
-        self.layer.shadowOffset = CGSizeMake(0, 8);
-        self.layer.shadowRadius = 12; // 0 8px 24px -12px
-
-        [NSNotificationCenter.defaultCenter addObserver:self
-                                               selector:@selector(themeChanged)
-                                                   name:LGPaletteDidChangeNotification
-                                                 object:nil];
+        _radius = radius; _darkStyle = dark; self.tag = kLGGlassTag; self.userInteractionEnabled = NO;
+        _clip = [UIView new]; _clip.clipsToBounds = YES; _clip.layer.borderWidth = 1;
+        _blur = [UIVisualEffectView new]; _tint = [UIView new]; _hl = [CALayer layer];
+        [_clip addSubview:_blur]; [_clip addSubview:_tint]; [_clip.layer addSublayer:_hl]; [self addSubview:_clip];
+        self.layer.shadowOffset = CGSizeMake(0, 8); self.layer.shadowRadius = 12;
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(themeChanged) name:LGPaletteDidChangeNotification object:nil];
         [self refresh];
     }
     return self;
 }
-
-- (void)dealloc {
-    [NSNotificationCenter.defaultCenter removeObserver:self];
-}
-
-- (void)themeChanged {
-    LGTheme *t = LGTheme.shared;
-    _darkStyle = t.dark;
-    _staticMode = t.staticMode;
-    _staticFill = t.palette.b2;
-    [self refresh];
-}
-
-- (void)setRadius:(CGFloat)r {
-    _radius = r;
-    [self setNeedsLayout];
-}
-
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)themeChanged { LGTheme *t = LGTheme.shared; _darkStyle = t.dark; _staticMode = t.staticMode; _staticFill = t.palette.b2; [self refresh]; }
+- (void)setRadius:(CGFloat)r { _radius = r; [self setNeedsLayout]; }
 - (void)refresh {
-    // sheet: dark fill .09 / border .2 / highlight .28 ; light .55 / .8 / .95 (TUNE)
-    CGFloat fill = _darkStyle ? .09 : .55;
-    CGFloat border = _darkStyle ? .2 : .8;
-    CGFloat hl = _darkStyle ? .28 : .95;
-
+    CGFloat fill = _darkStyle ? .09 : .55, border = _darkStyle ? .2 : .8, hl = _darkStyle ? .28 : .95;   // TUNE: material adds grey
     if (_staticMode) {
-        _blur.effect = nil;
-        _blur.hidden = YES;
-        _tint.backgroundColor = _staticFill ?: [UIColor colorWithWhite:.12 alpha:1];
-        _clip.layer.borderColor = [UIColor colorWithWhite:.5 alpha:.35].CGColor;
-        _hl.hidden = YES;
-        self.layer.shadowOpacity = 0;
+        _blur.effect = nil; _blur.hidden = YES; _tint.backgroundColor = _staticFill ?: [UIColor colorWithWhite:.12 alpha:1];
+        _clip.layer.borderColor = [UIColor colorWithWhite:.5 alpha:.35].CGColor; _hl.hidden = YES; self.layer.shadowOpacity = 0;
     } else {
         _blur.hidden = NO;
-        _blur.effect = [UIBlurEffect effectWithStyle:_darkStyle ? UIBlurEffectStyleSystemUltraThinMaterialDark
-                                                               : UIBlurEffectStyleSystemUltraThinMaterialLight];
-        _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:fill];
-        _clip.layer.borderColor = [UIColor colorWithWhite:1 alpha:border].CGColor;
-        _hl.backgroundColor = [UIColor colorWithWhite:1 alpha:hl].CGColor;
-        _hl.hidden = NO;
-        self.layer.shadowColor = UIColor.blackColor.CGColor;
-        self.layer.shadowOpacity = .35;
+        _blur.effect = [UIBlurEffect effectWithStyle:_darkStyle ? UIBlurEffectStyleSystemUltraThinMaterialDark : UIBlurEffectStyleSystemUltraThinMaterialLight];
+        _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:fill]; _clip.layer.borderColor = [UIColor colorWithWhite:1 alpha:border].CGColor;
+        _hl.backgroundColor = [UIColor colorWithWhite:1 alpha:hl].CGColor; _hl.hidden = NO;
+        self.layer.shadowColor = UIColor.blackColor.CGColor; self.layer.shadowOpacity = .35;
     }
 }
-
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
     if (b.size.width <= 0 || b.size.height <= 0) return;
-
-    _clip.frame = b;
-    _blur.frame = b;
-    _tint.frame = b;
-    _clip.layer.cornerRadius = MIN(_radius, MIN(b.size.width, b.size.height) / 2);
-    CGFloat r = _clip.layer.cornerRadius;
+    _clip.frame = b; _blur.frame = b; _tint.frame = b;
+    _clip.layer.cornerRadius = MIN(_radius, MIN(b.size.width, b.size.height) / 2); CGFloat r = _clip.layer.cornerRadius;
     _hl.frame = CGRectMake(r * .6, 0, MAX(0, b.size.width - r * 1.2), 1);
-
     CGRect sp = CGRectInset(b, 12, 12);
-    if (sp.size.width > 0 && sp.size.height > 0) {
-        self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:sp cornerRadius:MAX(0, r - 12)].CGPath;
-    } else {
-        self.layer.shadowPath = nil;
-    }
+    if (sp.size.width > 0 && sp.size.height > 0) self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:sp cornerRadius:MAX(0, r - 12)].CGPath;
+    else self.layer.shadowPath = nil;
 }
 @end
 
-// ============================ helpers ============================
+#pragma mark - LGVideoSampler (experimental)
+@implementation LGVideoSampler
+static NSTimer *sTimer; static __weak UIView *sTarget;
++ (void)startForView:(UIView *)v {
+    [self stop]; sTarget = v;
+    sTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 repeats:YES block:^(__unused NSTimer *t) { [LGVideoSampler tick]; }];
+}
++ (void)stop { [sTimer invalidate]; sTimer = nil; sTarget = nil; }
++ (void)tick {
+    UIView *v = sTarget; if (!v || !v.window || v.bounds.size.width < 50 || !LGTheme.shared.ambient) return;
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"LG_video"]) return;
+    CGSize sz = CGSizeMake(64, MAX(16, 64 * v.bounds.size.height / v.bounds.size.width));
+    UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat defaultFormat]; f.scale = 1;
+    UIImage *img = [[[UIGraphicsImageRenderer alloc] initWithSize:sz format:f] imageWithActions:^(__unused UIGraphicsImageRendererContext *c) {
+        [v drawViewHierarchyInRect:CGRectMake(0, 0, sz.width, sz.height) afterScreenUpdates:NO];
+    }];
+    [LGTheme.shared ingestVideoFrame:img];
+}
+@end
+
+#pragma mark - helpers
 LGBackgroundView *LGInstallBackground(UIView *host) {
     if (!host) return nil;
-    UIView *old = [host viewWithTag:kLGBgTag];
-    if ([old isKindOfClass:LGBackgroundView.class]) return (LGBackgroundView *)old;
+    UIView *old = [host viewWithTag:kLGBgTag]; if ([old isKindOfClass:LGBackgroundView.class]) return (LGBackgroundView *)old;
     LGBackgroundView *bg = [[LGBackgroundView alloc] initWithFrame:host.bounds];
-    bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [host insertSubview:bg atIndex:0];
-    return bg;
+    bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [host insertSubview:bg atIndex:0]; return bg;
 }
-
 LGGlassView *LGAttachGlass(UIView *host, CGFloat radius) {
     if (!host) return nil;
     UIView *old = [host viewWithTag:kLGGlassTag];
-    if ([old isKindOfClass:LGGlassView.class]) {
-        ((LGGlassView *)old).radius = radius;
-        return (LGGlassView *)old;
-    }
+    if ([old isKindOfClass:LGGlassView.class]) { ((LGGlassView *)old).radius = radius; return (LGGlassView *)old; }
     host.backgroundColor = UIColor.clearColor;
-    LGGlassView *g = [[LGGlassView alloc] initWithRadius:radius dark:LGTheme.shared.dark];
-    g.frame = host.bounds;
-    g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [host insertSubview:g atIndex:0];
-    [g themeChanged];
-    return g;
+    LGGlassView *g = [[LGGlassView alloc] initWithRadius:radius dark:LGTheme.shared.dark]; g.frame = host.bounds;
+    g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [host insertSubview:g atIndex:0]; [g themeChanged]; return g;
 }

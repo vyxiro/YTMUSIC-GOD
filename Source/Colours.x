@@ -1,13 +1,10 @@
 #import <UIKit/UIKit.h>
+#import "LiquidGlass.h"
 #import "ThemeManager.h"
 
 static BOOL YTMU(NSString *key) {
     NSDictionary *YTMUltimateDict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
     return [YTMUltimateDict[key] boolValue];
-}
-
-static BOOL isOLEDTheme(void) {
-    return YTMU(@"YTMUltimateIsEnabled") && [ThemeManager sharedManager].oledBlackEnabled;
 }
 
 static BOOL isOLEDKeyboard() {
@@ -43,127 +40,66 @@ static BOOL isLowContrast() {
 @interface UICandidateViewController : UIViewController
 @end
 
-#pragma mark - OLED Dark mode
-@interface YTColor : UIColor
-+ (UIColor *)blackPure;
-@end
-
-%hook YTColor
-+ (UIColor *)black0 {
-    if (![ThemeManager sharedManager].isStaticMode) return %orig;
-    return isOLEDTheme() ? [self blackPure] : %orig;
-}
-
-+ (UIColor *)black1 {
-    if (![ThemeManager sharedManager].isStaticMode) return %orig;
-    return isOLEDTheme() ? [self blackPure] : %orig;
-}
-
-+ (UIColor *)black2 {
-    if (![ThemeManager sharedManager].isStaticMode) return %orig;
-    return isOLEDTheme() ? [self blackPure] : %orig;
-}
-
-+ (UIColor *)black3 {
-    if (![ThemeManager sharedManager].isStaticMode) return %orig;
-    return isOLEDTheme() ? [self blackPure] : %orig;
-}
-
-+ (UIColor *)black4 {
-    if (![ThemeManager sharedManager].isStaticMode) return %orig;
-    return isOLEDTheme() ? [self blackPure] : %orig;
-}
-%end
-
 %hook YTMPlayerPageColorScheme
 - (UIColor *)playButtonColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[ThemeManager sharedManager] accentColor1];
-    }
-    return %orig;
+    return LGTheme.shared.palette.a1 ?: %orig;
 }
 
 - (UIColor *)backgroundColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [UIColor clearColor];
-    }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor clearColor];
 }
 
 - (UIColor *)expandedTabsBackgroundColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [UIColor clearColor];
-    }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor clearColor];
 }
 
 - (UIColor *)miniPlayerColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[ThemeManager sharedManager] glassBackgroundColor];
+    if (LGTheme.shared.staticMode) {
+        return LGTheme.shared.palette.b2 ?: %orig;
     }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
 }
 
 - (UIColor *)expandedTabViewColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [UIColor clearColor];
-    }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor clearColor];
 }
 
 - (UIColor *)overlayButtonColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[ThemeManager sharedManager] glassBackgroundColor];
+    if (LGTheme.shared.staticMode) {
+        return LGTheme.shared.palette.b2 ?: %orig;
     }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
-}
-
-- (UIColor *)overlayErrorBackgroundColor {
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
 }
 
 - (UIColor *)AVSwitchBackgroundColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[ThemeManager sharedManager] glassBackgroundColor];
+    if (LGTheme.shared.staticMode) {
+        return LGTheme.shared.palette.b2 ?: %orig;
     }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor colorWithWhite:1.0f alpha:(LGTheme.shared.dark ? 0.09f : 0.55f)];
 }
 
 - (UIColor *)AVSwitchActiveModeColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[ThemeManager sharedManager] accentColor1];
-    }
-    return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig;
+    return LGTheme.shared.palette.a1 ?: %orig;
 }
 
 - (UIColor *)queueBackgroundColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [UIColor clearColor];
-    }
-    return isOLEDTheme() ? [UIColor blackColor] : %orig;
+    return [UIColor clearColor];
 }
 
 - (UIColor *)queueCurrentlyPlayingColor {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        return [[[ThemeManager sharedManager] accentColor1] colorWithAlphaComponent:0.25f];
-    }
-    return isOLEDTheme() ? [[UIColor whiteColor] colorWithAlphaComponent:0.1] : %orig;
+    UIColor *a1 = LGTheme.shared.palette.a1;
+    return a1 ? [a1 colorWithAlphaComponent:0.25f] : %orig;
 }
 
 - (BOOL)gradientBackgroundEnabled {
-    if (![ThemeManager sharedManager].isStaticMode) return NO;
-    return isOLEDTheme() ? NO : %orig;
+    return NO;
 }
 %end
 
 %hook YTPivotBarView
 - (UIView *)contentView {
     UIView *orig = %orig;
-    if (![ThemeManager sharedManager].isStaticMode) {
-        orig.backgroundColor = [UIColor clearColor];
-    } else if (isOLEDTheme()) {
-        orig.backgroundColor = [UIColor blackColor];
-    }
+    orig.backgroundColor = [UIColor clearColor];
     return orig;
 }
 %end
@@ -171,16 +107,12 @@ static BOOL isLowContrast() {
 @interface YTLightweightBrowseBackgroundView : UIView
 @end
 
+@implementation YTLightweightBrowseBackgroundView (LGDummy)
+@end
+
 %hook YTLightweightBrowseBackgroundView
 - (UIImageView *)imageView {
-    if (![ThemeManager sharedManager].isStaticMode) {
-        self.backgroundColor = [UIColor clearColor];
-        return nil;
-    }
-    if (!isOLEDTheme()) {
-        return %orig;
-    }
-    self.backgroundColor = [UIColor blackColor];
+    self.backgroundColor = [UIColor clearColor];
     return nil;
 }
 %end
