@@ -118,9 +118,10 @@ static void YTMInstallCrossfadeAdapters(void) {
                 YTPlayerViewController *pvc = gCurrentPlayerVC;
                 YTIStreamingData *sd = pvc.playerResponse.playerData.streamingData;
                 if (!sd) return;
-                for (id fmt in sd.adaptiveFormatsArray) {
+                for (YTIFormatStream *fmt in sd.adaptiveFormatsArray) {
                     if ([fmt respondsToSelector:@selector(URL)]) {
-                        NSString *u = [fmt URL];
+                        id raw = [fmt URL];
+                        NSString *u = [raw isKindOfClass:[NSURL class]] ? [(NSURL *)raw absoluteString] : ([raw isKindOfClass:[NSString class]] ? (NSString *)raw : nil);
                         if (u.length && ([u containsString:@"mime=audio"] || [u containsString:@"mime%3Daudio"])) {
                             urlStr = u;
                             break;
