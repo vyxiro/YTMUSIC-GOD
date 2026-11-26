@@ -313,8 +313,28 @@ static BOOL LGIsOpaqueCanvasColor(UIColor *c) {
     return NO;
 }
 
+static void LGClearCellInnerCanvases(UIView *view, CGFloat cellW, int depth) {
+    if (!view || depth > 5) return;
+    NSString *cls = NSStringFromClass([view class]);
+    if ([view isKindOfClass:[LGBackgroundView class]] ||
+        [view isKindOfClass:[LGGlassView class]] ||
+        [view isKindOfClass:[UIImageView class]] ||
+        [view isKindOfClass:[UIButton class]] ||
+        [view isKindOfClass:[UILabel class]] ||
+        [cls isEqualToString:@"YTImageView"] ||
+        [cls containsString:@"Chip"]) {
+        return;
+    }
+    if (view.bounds.size.width >= cellW * 0.75f && view.bounds.size.height >= 28.0f && LGIsOpaqueCanvasColor(view.backgroundColor)) {
+        view.backgroundColor = [UIColor clearColor];
+    }
+    for (UIView *sub in view.subviews) {
+        LGClearCellInnerCanvases(sub, cellW, depth + 1);
+    }
+}
+
 static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
-    if (!root || depth > 8) return;
+    if (!root || depth > 9) return;
     NSString *cls = NSStringFromClass([root class]);
     if ([root isKindOfClass:[LGBackgroundView class]] ||
         [root isKindOfClass:[LGGlassView class]] ||
@@ -329,15 +349,27 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
         return;
     }
 
-    // Attach frosted glass pill to Search input bars inside header/search/recent views
+    // Attach frosted glass pill to Search input bars inside header/search/recent views (walk up 1-3 wrapper levels)
     if ([root isKindOfClass:[UITextField class]] || [root isKindOfClass:[UISearchBar class]]) {
-        UIView *box = root.superview;
-        if (box && ![box isKindOfClass:[LGGlassView class]] &&
-            box.bounds.size.width >= 150.0f && box.bounds.size.height >= 28.0f && box.bounds.size.height <= 58.0f) {
-            root.backgroundColor = [UIColor clearColor];
-            LGGlassView *pill = LGAttachGlass(box, box.bounds.size.height * 0.5f);
-            pill.frame = box.bounds;
-            [box sendSubviewToBack:pill];
+        root.backgroundColor = [UIColor clearColor];
+        CGFloat maxW = UIScreen.mainScreen.bounds.size.width - 16.0f;
+        UIView *cur = root.superview;
+        UIView *pillTarget = nil;
+        for (int hop = 0; hop < 3 && cur; hop++) {
+            if ([cur isKindOfClass:[LGGlassView class]]) break;
+            CGSize bs = cur.bounds.size;
+            if (bs.width >= 150.0f && bs.width <= maxW && bs.height >= 30.0f && bs.height <= 58.0f) {
+                pillTarget = cur;
+            }
+            cur = cur.superview;
+        }
+        if (pillTarget) {
+            for (UIView *inner = root.superview; inner && inner != pillTarget; inner = inner.superview) {
+                inner.backgroundColor = [UIColor clearColor];
+            }
+            LGGlassView *pill = LGAttachGlass(pillTarget, pillTarget.bounds.size.height * 0.5f);
+            pill.frame = pillTarget.bounds;
+            [pillTarget sendSubviewToBack:pill];
         }
         return;
     }
@@ -363,6 +395,17 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
     if (isCell) {
         if (LGIsOpaqueCanvasColor(root.backgroundColor)) {
             root.backgroundColor = [UIColor clearColor];
+        }
+        if ([root isKindOfClass:[UITableViewCell class]]) {
+            UIView *cv = ((UITableViewCell *)root).contentView;
+            if (LGIsOpaqueCanvasColor(cv.backgroundColor)) cv.backgroundColor = [UIColor clearColor];
+            LGClearCellInnerCanvases(cv, root.bounds.size.width, 0);
+        } else if ([root isKindOfClass:[UICollectionViewCell class]]) {
+            UIView *cv = ((UICollectionViewCell *)root).contentView;
+            if (LGIsOpaqueCanvasColor(cv.backgroundColor)) cv.backgroundColor = [UIColor clearColor];
+            LGClearCellInnerCanvases(cv, root.bounds.size.width, 0);
+        } else {
+            LGClearCellInnerCanvases(root, root.bounds.size.width, 0);
         }
         return;
     }
@@ -419,7 +462,20 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (LGAncestorHasLGBackground(self.view)) {
+    if (!self.view || !self.view.window) return;
+    if (!LGAncestorHasLGBackground(self.view) && !LGAncestorHasLGGlassSheet(self.view)) {
+        CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+        if (self.view.bounds.size.width >= screenW - 36.0f && self.view.bounds.size.height >= 200.0f) {
+            LGBackgroundView *bg = LGInstallBackground(self.view);
+            if (bg) {
+                bg.scrimMultiplier = 1.35f;
+                bg.frame = self.view.bounds;
+                [self.view sendSubviewToBack:bg];
+            }
+        }
+    }
+    if (LGAncestorHasLGBackground(self.view) || LGAncestorHasLGGlassSheet(self.view) ||
+        [[self.view.subviews firstObject] isKindOfClass:[LGBackgroundView class]]) {
         self.view.backgroundColor = [UIColor clearColor];
         LGClearOpaqueBrowseHierarchy(self.view, 0);
     }
@@ -433,7 +489,7 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (LGAncestorHasLGBackground(self.view)) {
+    if (LGAncestorHasLGBackground(self.view) || LGAncestorHasLGGlassSheet(self.view)) {
         self.view.backgroundColor = [UIColor clearColor];
         LGClearOpaqueBrowseHierarchy(self.view, 0);
     }
@@ -446,7 +502,7 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 %hook MDCFlexibleHeaderView
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (LGAncestorHasLGBackground(self)) {
+    if (LGAncestorHasLGBackground(self) || LGAncestorHasLGGlassSheet(self)) {
         %orig([UIColor clearColor]);
     } else {
         %orig;
@@ -455,7 +511,7 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 
 - (void)layoutSubviews {
     %orig;
-    if (LGAncestorHasLGBackground(self)) {
+    if (LGAncestorHasLGBackground(self) || LGAncestorHasLGGlassSheet(self)) {
         self.backgroundColor = [UIColor clearColor];
         LGClearOpaqueBrowseHierarchy(self, 0);
     }
@@ -464,15 +520,34 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 %end
 %end
 
-%group ModalSheetLiquidGlassHooks
-%hook UIViewController
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    UIView *v = self.view;
+static void LGApplyLiquidGlassToVC(UIViewController *vc) {
+    UIView *v = vc.view;
     if (!v || !v.window) return;
 
-    NSString *cls = NSStringFromClass([self class]);
+    NSString *cls = NSStringFromClass([vc class]);
+    if ([vc isKindOfClass:[UINavigationController class]]) {
+        UINavigationController *nav = (UINavigationController *)vc;
+        UIViewController *top = nav.topViewController;
+        NSString *topCls = top ? NSStringFromClass([top class]) : @"";
+        if (!([topCls hasPrefix:@"YT"] || [topCls hasPrefix:@"ELM"] || [topCls hasPrefix:@"GOO"])) {
+            return;
+        }
+        CGSize screenSz = UIScreen.mainScreen.bounds.size;
+        if (v.bounds.size.width >= screenSz.width - 36.0f && v.bounds.size.height >= 240.0f) {
+            if (!LGAncestorHasLGBackground(v) && !LGAncestorHasLGGlassSheet(v)) {
+                v.backgroundColor = [UIColor clearColor];
+                LGBackgroundView *bg = LGInstallBackground(v);
+                if (bg) {
+                    bg.scrimMultiplier = 1.35f;
+                    bg.frame = v.bounds;
+                    [v sendSubviewToBack:bg];
+                }
+            }
+            LGClearOpaqueBrowseHierarchy(v, 0);
+        }
+        return;
+    }
+
     if (!([cls hasPrefix:@"YT"] || [cls hasPrefix:@"ELM"] || [cls hasPrefix:@"GOO"] || [cls hasPrefix:@"MDC"])) {
         return;
     }
@@ -492,15 +567,15 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
         [cls isEqualToString:@"GOOFlexibleHeaderViewController"] ||
         [cls isEqualToString:@"YTMSearchTabViewController"] ||
         [cls isEqualToString:@"YTMTabViewController"] ||
-        [cls isEqualToString:@"YTLightweightCollectionViewController"]) {
+        [cls isEqualToString:@"YTLightweightCollectionViewController"] ||
+        [cls isEqualToString:@"YTMDownloads"]) {
         return;
     }
 
     CGSize sz = v.bounds.size;
     CGSize screenSz = UIScreen.mainScreen.bounds.size;
     if (sz.width < screenSz.width - 36.0f || sz.height < 180.0f) {
-        // Still allow clearing header/search boxes inside Search suggestion/result controllers
-        if ([cls containsString:@"Search"]) {
+        if ([cls containsString:@"Search"] || LGAncestorHasLGBackground(v) || LGAncestorHasLGGlassSheet(v)) {
             if (LGIsOpaqueCanvasColor(v.backgroundColor)) v.backgroundColor = [UIColor clearColor];
             LGClearOpaqueBrowseHierarchy(v, 0);
         }
@@ -529,14 +604,20 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
         return;
     }
 
-    BOOL isModalSheet = [cls containsString:@"Comment"] ||
+    BOOL isSearchOrFullBrowse = [cls containsString:@"Search"] ||
+                                [cls containsString:@"Notification"] ||
+                                [cls containsString:@"Activity"] ||
+                                (sz.height >= screenSz.height * 0.72f && ![cls containsString:@"Sheet"] && ![cls containsString:@"Comment"] && ![cls containsString:@"Playlist"]);
+
+    BOOL isModalSheet = !isSearchOrFullBrowse && (
+                        [cls containsString:@"Comment"] ||
                         [cls containsString:@"Engagement"] ||
                         [cls containsString:@"Playlist"] ||
                         [cls containsString:@"Sheet"] ||
                         [cls containsString:@"Action"] ||
                         [cls containsString:@"Menu"] ||
                         [cls containsString:@"Dialog"] ||
-                        (sz.height < screenSz.height - 44.0f);
+                        (sz.height < screenSz.height - 44.0f));
 
     if (isModalSheet) {
         v.backgroundColor = [UIColor clearColor];
@@ -546,7 +627,7 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
         glass.backgroundColor = [UIColor colorWithWhite:(t.dark ? 0.0f : 1.0f) alpha:(t.dark ? 0.34f : 0.25f)];
         [v sendSubviewToBack:glass];
         LGClearOpaqueBrowseHierarchy(v, 0);
-    } else if ([cls containsString:@"Search"] || self.presentingViewController != nil) {
+    } else if (isSearchOrFullBrowse || vc.presentingViewController != nil) {
         v.backgroundColor = [UIColor clearColor];
         LGBackgroundView *bg = LGInstallBackground(v);
         if (bg) {
@@ -555,6 +636,76 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
             [v sendSubviewToBack:bg];
         }
         LGClearOpaqueBrowseHierarchy(v, 0);
+    }
+}
+
+%group ModalSheetLiquidGlassHooks
+%hook UIViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    LGApplyLiquidGlassToVC(self);
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    LGApplyLiquidGlassToVC(self);
+}
+
+%end
+%end
+
+%group ScrollListLiquidGlassHooks
+%hook UITableView
+
+- (void)layoutSubviews {
+    %orig;
+    if (!self.window) return;
+    if (!LGAncestorHasLGBackground(self) && !LGAncestorHasLGGlassSheet(self)) return;
+    if (self.dataSource && [NSStringFromClass([self.dataSource class]) containsString:@"QueueCarousel"]) return;
+    if (self.dataSource) {
+        NSString *dsCls = NSStringFromClass([self.dataSource class]);
+        if ([dsCls isEqualToString:@"YTMDownloads"] || [dsCls containsString:@"SettingsController"]) return;
+    }
+    if (LGIsOpaqueCanvasColor(self.backgroundColor)) {
+        self.backgroundColor = [UIColor clearColor];
+    }
+    if (self.backgroundView && LGIsOpaqueCanvasColor(self.backgroundView.backgroundColor)) {
+        self.backgroundView.backgroundColor = [UIColor clearColor];
+    }
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UITableViewCell class]]) {
+            UITableViewCell *cell = (UITableViewCell *)sub;
+            if (LGIsOpaqueCanvasColor(cell.backgroundColor)) cell.backgroundColor = [UIColor clearColor];
+            if (LGIsOpaqueCanvasColor(cell.contentView.backgroundColor)) cell.contentView.backgroundColor = [UIColor clearColor];
+            LGClearCellInnerCanvases(cell.contentView, cell.bounds.size.width, 0);
+        }
+    }
+}
+
+%end
+
+%hook UICollectionView
+
+- (void)layoutSubviews {
+    %orig;
+    if (!self.window) return;
+    if (!LGAncestorHasLGBackground(self) && !LGAncestorHasLGGlassSheet(self)) return;
+    if (self.dataSource && [NSStringFromClass([self.dataSource class]) containsString:@"QueueCarousel"]) return;
+    if (LGIsOpaqueCanvasColor(self.backgroundColor)) {
+        self.backgroundColor = [UIColor clearColor];
+    }
+    for (UIView *sub in self.subviews) {
+        NSString *cls = NSStringFromClass([sub class]);
+        if ([sub isKindOfClass:[UICollectionViewCell class]]) {
+            UICollectionViewCell *cell = (UICollectionViewCell *)sub;
+            if (LGIsOpaqueCanvasColor(cell.backgroundColor)) cell.backgroundColor = [UIColor clearColor];
+            if (LGIsOpaqueCanvasColor(cell.contentView.backgroundColor)) cell.contentView.backgroundColor = [UIColor clearColor];
+            LGClearCellInnerCanvases(cell.contentView, cell.bounds.size.width, 0);
+        } else if ([cls containsString:@"ASCollectionViewCell"]) {
+            if (LGIsOpaqueCanvasColor(sub.backgroundColor)) sub.backgroundColor = [UIColor clearColor];
+            LGClearCellInnerCanvases(sub, sub.bounds.size.width, 0);
+        }
     }
 }
 
@@ -1394,6 +1545,7 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
     if (objc_getClass("GOOFlexibleHeaderViewController"))       %init(GOOFlexibleHeaderHooks);
     if (objc_getClass("MDCFlexibleHeaderView"))                 %init(FlexibleHeaderHooks);
     %init(ModalSheetLiquidGlassHooks);
+    %init(ScrollListLiquidGlassHooks);
     if (objc_getClass("YTMSearchTabViewController"))            %init(SearchTabHooks);
     if (objc_getClass("YTMTabViewController"))                  %init(TabVCHooks);
     if (objc_getClass("YTLightweightCollectionViewController")) %init(LightweightCollectionVCHooks);
