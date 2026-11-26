@@ -19,6 +19,9 @@
 @interface GOOHeaderViewController : UIViewController
 @end
 
+@interface GOOFlexibleHeaderViewController : UIViewController
+@end
+
 @interface MDCFlexibleHeaderView : UIView
 @end
 
@@ -281,24 +284,37 @@ static void LGResetSecondaryTransportButton(UIView *btn, LGPalette *p) {
 %end
 %end
 
+static BOOL LGAncestorHasLGGlassSheet(UIView *v) {
+    UIView *cur = v.superview;
+    while (cur) {
+        for (UIView *sub in cur.subviews) {
+            if ([sub isKindOfClass:[LGGlassView class]] && !sub.hidden) return YES;
+        }
+        cur = cur.superview;
+    }
+    return NO;
+}
+
 static BOOL LGIsOpaqueCanvasColor(UIColor *c) {
     if (!c) return NO;
     CGFloat r = 0, g = 0, b = 0, a = 0;
     if ([c getRed:&r green:&g blue:&b alpha:&a]) {
         if (a <= 0.85f) return NO;
-        BOOL isDarkCanvas = (r < 0.16f && g < 0.16f && b < 0.16f);
+        CGFloat mx = MAX(r, MAX(g, b));
+        CGFloat mn = MIN(r, MIN(g, b));
+        BOOL isDarkNeutralCanvas = ((mx - mn) < 0.05f && mx < 0.25f) || (r < 0.16f && g < 0.16f && b < 0.16f);
         BOOL isWhiteCanvas = (r > 0.94f && g > 0.94f && b > 0.94f);
-        return isDarkCanvas || isWhiteCanvas;
+        return isDarkNeutralCanvas || isWhiteCanvas;
     }
     CGFloat w = 0;
     if ([c getWhite:&w alpha:&a]) {
-        return a > 0.85f && (w < 0.16f || w > 0.94f);
+        return a > 0.85f && (w < 0.25f || w > 0.94f);
     }
     return NO;
 }
 
 static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
-    if (!root || depth > 5) return;
+    if (!root || depth > 8) return;
     NSString *cls = NSStringFromClass([root class]);
     if ([root isKindOfClass:[LGBackgroundView class]] ||
         [root isKindOfClass:[LGGlassView class]] ||
@@ -313,11 +329,11 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
         return;
     }
 
-    // Attach frosted glass pill to Search input bars inside header/search views
-    if ([root isKindOfClass:[UITextField class]]) {
+    // Attach frosted glass pill to Search input bars inside header/search/recent views
+    if ([root isKindOfClass:[UITextField class]] || [root isKindOfClass:[UISearchBar class]]) {
         UIView *box = root.superview;
         if (box && ![box isKindOfClass:[LGGlassView class]] &&
-            box.bounds.size.width >= 160.0f && box.bounds.size.height >= 30.0f && box.bounds.size.height <= 56.0f) {
+            box.bounds.size.width >= 150.0f && box.bounds.size.height >= 28.0f && box.bounds.size.height <= 58.0f) {
             root.backgroundColor = [UIColor clearColor];
             LGGlassView *pill = LGAttachGlass(box, box.bounds.size.height * 0.5f);
             pill.frame = box.bounds;
@@ -335,14 +351,21 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
     } else if ([root isKindOfClass:[UITableView class]] ||
                [root isKindOfClass:[UICollectionView class]] ||
                [cls containsString:@"MDCFlexibleHeaderView"] ||
+               [cls containsString:@"MDCHeaderStackView"] ||
                [cls containsString:@"ChipCloudView"] ||
-               [cls containsString:@"YTWrapperView"]) {
+               [cls containsString:@"YTWrapperView"] ||
+               [cls containsString:@"SearchBar"]) {
         if (![cls containsString:@"Cell"]) {
             root.backgroundColor = [UIColor clearColor];
         }
     }
 
-    if (isCell) return;
+    if (isCell) {
+        if (LGIsOpaqueCanvasColor(root.backgroundColor)) {
+            root.backgroundColor = [UIColor clearColor];
+        }
+        return;
+    }
     for (UIView *sub in root.subviews) {
         LGClearOpaqueBrowseHierarchy(sub, depth + 1);
     }
@@ -405,14 +428,133 @@ static void LGClearOpaqueBrowseHierarchy(UIView *root, int depth) {
 %end
 %end
 
+%group GOOFlexibleHeaderHooks
+%hook GOOFlexibleHeaderViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (LGAncestorHasLGBackground(self.view)) {
+        self.view.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(self.view, 0);
+    }
+}
+
+%end
+%end
+
 %group FlexibleHeaderHooks
 %hook MDCFlexibleHeaderView
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (LGAncestorHasLGBackground(self)) {
+        %orig([UIColor clearColor]);
+    } else {
+        %orig;
+    }
+}
 
 - (void)layoutSubviews {
     %orig;
     if (LGAncestorHasLGBackground(self)) {
         self.backgroundColor = [UIColor clearColor];
         LGClearOpaqueBrowseHierarchy(self, 0);
+    }
+}
+
+%end
+%end
+
+%group ModalSheetLiquidGlassHooks
+%hook UIViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    UIView *v = self.view;
+    if (!v || !v.window) return;
+
+    NSString *cls = NSStringFromClass([self class]);
+    if (!([cls hasPrefix:@"YT"] || [cls hasPrefix:@"ELM"] || [cls hasPrefix:@"GOO"] || [cls hasPrefix:@"MDC"])) {
+        return;
+    }
+    if ([cls isEqualToString:@"YTMContentViewController"] ||
+        [cls isEqualToString:@"YTMBrowseViewController"] ||
+        [cls isEqualToString:@"YTMWatchViewController"] ||
+        [cls isEqualToString:@"YTMNowPlayingViewController"] ||
+        [cls isEqualToString:@"YTMMiniPlayerViewController"] ||
+        [cls isEqualToString:@"YTMPlayerCarouselViewController"] ||
+        [cls isEqualToString:@"YTMPlayerHeaderViewController"] ||
+        [cls isEqualToString:@"YTMPlayerTabViewController"] ||
+        [cls isEqualToString:@"YTMPivotBarViewController"] ||
+        [cls isEqualToString:@"YTMVideoOverlayViewController"] ||
+        [cls isEqualToString:@"YTPlayerViewController"] ||
+        [cls isEqualToString:@"YTMQueueCarouselViewController"] ||
+        [cls isEqualToString:@"GOOHeaderViewController"] ||
+        [cls isEqualToString:@"GOOFlexibleHeaderViewController"] ||
+        [cls isEqualToString:@"YTMSearchTabViewController"] ||
+        [cls isEqualToString:@"YTMTabViewController"] ||
+        [cls isEqualToString:@"YTLightweightCollectionViewController"]) {
+        return;
+    }
+
+    CGSize sz = v.bounds.size;
+    CGSize screenSz = UIScreen.mainScreen.bounds.size;
+    if (sz.width < screenSz.width - 36.0f || sz.height < 180.0f) {
+        // Still allow clearing header/search boxes inside Search suggestion/result controllers
+        if ([cls containsString:@"Search"]) {
+            if (LGIsOpaqueCanvasColor(v.backgroundColor)) v.backgroundColor = [UIColor clearColor];
+            LGClearOpaqueBrowseHierarchy(v, 0);
+        }
+        return;
+    }
+
+    if (LGAncestorHasLGBackground(v)) {
+        if (([cls containsString:@"Comment"] || [cls containsString:@"Engagement"] || [cls containsString:@"AddToPlaylist"]) &&
+            sz.height < screenSz.height - 80.0f && !LGAncestorHasLGGlassSheet(v)) {
+            v.backgroundColor = [UIColor clearColor];
+            LGGlassView *glass = LGAttachGlass(v, 26.0f);
+            glass.frame = v.bounds;
+            LGTheme *t = LGTheme.shared;
+            glass.backgroundColor = [UIColor colorWithWhite:(t.dark ? 0.0f : 1.0f) alpha:(t.dark ? 0.30f : 0.22f)];
+            [v sendSubviewToBack:glass];
+        } else if (LGIsOpaqueCanvasColor(v.backgroundColor)) {
+            v.backgroundColor = [UIColor clearColor];
+        }
+        LGClearOpaqueBrowseHierarchy(v, 0);
+        return;
+    }
+
+    if (LGAncestorHasLGGlassSheet(v)) {
+        if (LGIsOpaqueCanvasColor(v.backgroundColor)) v.backgroundColor = [UIColor clearColor];
+        LGClearOpaqueBrowseHierarchy(v, 0);
+        return;
+    }
+
+    BOOL isModalSheet = [cls containsString:@"Comment"] ||
+                        [cls containsString:@"Engagement"] ||
+                        [cls containsString:@"Playlist"] ||
+                        [cls containsString:@"Sheet"] ||
+                        [cls containsString:@"Action"] ||
+                        [cls containsString:@"Menu"] ||
+                        [cls containsString:@"Dialog"] ||
+                        (sz.height < screenSz.height - 44.0f);
+
+    if (isModalSheet) {
+        v.backgroundColor = [UIColor clearColor];
+        LGGlassView *glass = LGAttachGlass(v, 26.0f);
+        glass.frame = v.bounds;
+        LGTheme *t = LGTheme.shared;
+        glass.backgroundColor = [UIColor colorWithWhite:(t.dark ? 0.0f : 1.0f) alpha:(t.dark ? 0.34f : 0.25f)];
+        [v sendSubviewToBack:glass];
+        LGClearOpaqueBrowseHierarchy(v, 0);
+    } else if ([cls containsString:@"Search"] || self.presentingViewController != nil) {
+        v.backgroundColor = [UIColor clearColor];
+        LGBackgroundView *bg = LGInstallBackground(v);
+        if (bg) {
+            bg.scrimMultiplier = 1.35f;
+            bg.frame = v.bounds;
+            [v sendSubviewToBack:bg];
+        }
+        LGClearOpaqueBrowseHierarchy(v, 0);
     }
 }
 
@@ -1249,7 +1391,9 @@ static void LGUpdatePivotItemVisual(YTPivotBarItemView *item) {
     if (objc_getClass("YTMContentViewController"))              %init(ContentVCHooks);
     if (objc_getClass("YTMBrowseViewController"))               %init(BrowseVCHooks);
     if (objc_getClass("GOOHeaderViewController"))               %init(GOOHeaderHooks);
+    if (objc_getClass("GOOFlexibleHeaderViewController"))       %init(GOOFlexibleHeaderHooks);
     if (objc_getClass("MDCFlexibleHeaderView"))                 %init(FlexibleHeaderHooks);
+    %init(ModalSheetLiquidGlassHooks);
     if (objc_getClass("YTMSearchTabViewController"))            %init(SearchTabHooks);
     if (objc_getClass("YTMTabViewController"))                  %init(TabVCHooks);
     if (objc_getClass("YTLightweightCollectionViewController")) %init(LightweightCollectionVCHooks);

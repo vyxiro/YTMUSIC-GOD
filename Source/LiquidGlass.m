@@ -250,17 +250,14 @@ static LGPalette *LGNeutral(CGFloat h, BOOL dark) {   // black&white / greyscale
     @synchronized(self) {
         NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
         _dark = [d objectForKey:@"LG_dark"] ? [d boolForKey:@"LG_dark"] : YES;
-        NSString *styleStr = [d stringForKey:@"LG_style"];
-        BOOL styleStatic = styleStr ? [styleStr isEqualToString:@"static"] : [d boolForKey:@"LG_static"];
-        _staticMode = styleStatic || UIAccessibilityIsReduceTransparencyEnabled();
+        _staticMode = NO;
         _ambient = [d boolForKey:@"LG_ambient"];
         _fadeDuration = LGClamp([d objectForKey:@"LG_fade"] ? [d doubleForKey:@"LG_fade"] : 1.8, 0, 4);
         if (_ambient && _lastImage && (!_art || _artDark != _dark)) {       // dark/light toggled: recompute (about 1 ms)
             LGPalette *p = [LGPalette paletteFromImage:_lastImage dark:_dark]; if (p) { _art = p; _artDark = _dark; }
             _blurredArt = LGMakeBlurredArtwork(_lastImage, _dark);
         }
-        LGPalette *base = styleStatic ? [LGPalette staticNamed:([d stringForKey:@"LG_static_theme"] ?: @"Cherry Red") dark:_dark]
-                                      : [LGPalette presetNamed:([d stringForKey:@"LG_theme"] ?: @"Aurora Teal") dark:_dark];
+        LGPalette *base = [LGPalette presetNamed:([d stringForKey:@"LG_theme"] ?: @"Aurora Teal") dark:_dark];
         _palette = (_ambient && _art) ? _art : base;
     }
 }

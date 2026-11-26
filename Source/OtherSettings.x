@@ -32,10 +32,10 @@ static BOOL YTMU(NSString *key) {
 }
 %end
 
-// Make chip clouds (aka headers) background transparent
+// Make chip clouds (aka headers) background transparent for Liquid Glass
 %hook YTMChipCloudView
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    YTMU(@"YTMUltimateIsEnabled") && YTMU(@"noStickyHeaders") ? %orig([UIColor clearColor]) : %orig;
+    %orig([UIColor clearColor]);
 }
 %end
 

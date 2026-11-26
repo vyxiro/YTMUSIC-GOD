@@ -20,7 +20,21 @@
         [self setActive];
     });
 
-    self.hud = [MBProgressHUD showHUDAddedTo:[UIApplication sharedApplication].keyWindow animated:YES];
+    UIWindow *kw = nil;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive && [scene isKindOfClass:[UIWindowScene class]]) {
+                for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                    if (w.isKeyWindow) { kw = w; break; }
+                }
+                if (!kw) kw = ((UIWindowScene *)scene).windows.firstObject;
+                if (kw) break;
+            }
+        }
+    }
+    if (!kw) kw = [UIApplication sharedApplication].keyWindow;
+
+    self.hud = kw ? [MBProgressHUD showHUDAddedTo:kw animated:YES] : nil;
     self.hud.mode = MBProgressHUDModeAnnularDeterminate;
     self.hud.label.text = LOC(@"DOWNLOADING");
 
@@ -93,10 +107,10 @@
     }
 
     int timeInMilliseconds = [statistics getTime];
-    if (timeInMilliseconds > 0) {
+    if (timeInMilliseconds > 0 && self.duration > 0) {
         double totalVideoDuration = self.duration;
         double timeInSeconds = timeInMilliseconds / 1000.0;
-        double percentage = timeInSeconds / totalVideoDuration;
+        double percentage = MAX(0.0, MIN(1.0, timeInSeconds / totalVideoDuration));
 
         if (self.hud && self.hud.mode == MBProgressHUDModeAnnularDeterminate) {
             self.hud.progress = percentage;
@@ -138,20 +152,23 @@
 }
 
 - (void)downloadImage:(NSURL *)link {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    if (!link) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSData *imageData = [NSData dataWithContentsOfURL:link];
-        UIImage *image = [UIImage imageWithData:imageData];
+        UIImage *image = imageData.length ? [UIImage imageWithData:imageData] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (image) UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil);
+            UIWindow *kw = [UIApplication sharedApplication].windows.firstObject ?: [UIApplication sharedApplication].keyWindow;
+            self.hud = kw ? [MBProgressHUD showHUDAddedTo:kw animated:YES] : nil;
+            self.hud.mode = MBProgressHUDModeCustomView;
+            self.hud.label.text = image ? LOC(@"SAVED_TO_PHOTOS") : LOC(@"OOPS");
 
-        if (image) UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil);
-        self.hud = [MBProgressHUD showHUDAddedTo:[UIApplication sharedApplication].keyWindow animated:YES];
-        self.hud.mode = MBProgressHUDModeCustomView;
-        self.hud.label.text = LOC(@"SAVED_TO_PHOTOS");
+            UIImageView *checkmarkImageView = [[UIImageView alloc] initWithImage:[self imageWithSystemIconNamed:(image ? @"checkmark" : @"xmark")]];
+            checkmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
+            self.hud.customView = checkmarkImageView;
 
-        UIImageView *checkmarkImageView = [[UIImageView alloc] initWithImage:[self imageWithSystemIconNamed:@"checkmark"]];
-        checkmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
-        self.hud.customView = checkmarkImageView;
-
-        [self.hud hideAnimated:YES afterDelay:2.0];
+            [self.hud hideAnimated:YES afterDelay:2.0];
+        });
     });
 }
 

@@ -198,8 +198,7 @@ static char kDiagTextKey;
 
     self.previewTitleLabel.textColor = palette.tx;
     self.previewSubtitleLabel.textColor = palette.mu;
-    self.previewSubtitleLabel.text = [NSString stringWithFormat:@"%@  •  %@",
-                                      staticMode ? @"Static" : @"Liquid Glass",
+    self.previewSubtitleLabel.text = [NSString stringWithFormat:@"Liquid Glass  •  %@",
                                       LGTheme.shared.ambient ? @"Ambient" : (palette.name ?: @"Preset")];
 
     self.previewProgressFill.backgroundColor = palette.a1;
@@ -242,7 +241,7 @@ static char kDiagTextKey;
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     switch (section) {
         case 0: return @"APPEARANCE";
-        case 1: return LGTheme.shared.staticMode ? @"STATIC LOOK PALETTES" : @"LIQUID GLASS PRESETS";
+        case 1: return @"LIQUID GLASS PRESETS";
         case 2: return @"MOTION & ADVANCED";
         case 3: return @"AMBIENT DIAGNOSTICS";
         default: return nil;
@@ -261,7 +260,7 @@ static char kDiagTextKey;
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
-        case 0: return 3; // Style, Colour Source, Dark/Light
+        case 0: return 2; // Colour Source, Dark Mode
         case 1: return 1; // 2-column preset swatch grid
         case 2: return 3; // Fade full-width slider, Video Sampling, OLED Keyboard
         case 3: return 2; // Live Ambient Status + Diagnostics sheet
@@ -271,7 +270,7 @@ static char kDiagTextKey;
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     if (indexPath.section == 1) {
-        NSArray *names = LGTheme.shared.staticMode ? LGPalette.staticNames : LGPalette.presetNames;
+        NSArray *names = LGPalette.presetNames;
         NSInteger rows = ((NSInteger)names.count + 1) / 2;
         return 12.0f + rows * 62.0f + (rows - 1) * 10.0f + 12.0f;
     }
@@ -308,15 +307,6 @@ static char kDiagTextKey;
 
     if (indexPath.section == 0) {
         if (indexPath.row == 0) {
-            cell.textLabel.text = @"Style";
-            cell.detailTextLabel.text = theme.staticMode ? @"Solid surface + soft glow" : @"Frosted Liquid Glass";
-            UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Liquid", @"Static"]];
-            seg.selectedSegmentIndex = theme.staticMode ? 1 : 0;
-            seg.selectedSegmentTintColor = accent;
-            [seg setTitleTextAttributes:@{NSForegroundColorAttributeName: onAccent} forState:UIControlStateSelected];
-            [seg addTarget:self action:@selector(styleChanged:) forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = seg;
-        } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Colour Source";
             cell.detailTextLabel.text = theme.ambient ? @"Follows playing song art" : @"Uses selected preset below";
             UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Preset", @"Ambient"]];
@@ -412,10 +402,8 @@ static char kDiagTextKey;
 - (void)populatePresetGridCell:(UITableViewCell *)cell {
     LGTheme *theme = LGTheme.shared;
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    BOOL isStatic = theme.staticMode;
-    NSArray<NSString *> *names = isStatic ? LGPalette.staticNames : LGPalette.presetNames;
-    NSString *selectedName = isStatic ? ([d stringForKey:@"LG_static_theme"] ?: @"Cherry Red")
-                                      : ([d stringForKey:@"LG_theme"] ?: @"Aurora Teal");
+    NSArray<NSString *> *names = LGPalette.presetNames;
+    NSString *selectedName = [d stringForKey:@"LG_theme"] ?: @"Aurora Teal";
 
     UIStackView *rowsStack = [[UIStackView alloc] init];
     rowsStack.tag = 9101;
@@ -447,12 +435,11 @@ static char kDiagTextKey;
                 continue;
             }
             NSString *name = names[idx];
-            LGPalette *pal = isStatic ? [LGPalette staticNamed:name dark:theme.dark]
-                                      : [LGPalette presetNamed:name dark:theme.dark];
+            LGPalette *pal = [LGPalette presetNamed:name dark:theme.dark];
             BOOL isActive = (!theme.ambient && [selectedName isEqualToString:name]);
 
             UIButton *tile = [UIButton buttonWithType:UIButtonTypeCustom];
-            tile.tag = (NSInteger)(isStatic ? (2000 + idx) : (1000 + idx));
+            tile.tag = (NSInteger)(1000 + idx);
             tile.layer.cornerRadius = 14.0f;
             tile.clipsToBounds = YES;
             tile.backgroundColor = [pal.b2 colorWithAlphaComponent:0.95f] ?: UIColor.secondarySystemBackgroundColor;
@@ -461,7 +448,7 @@ static char kDiagTextKey;
             tile.alpha = theme.ambient ? 0.58f : 1.0f;
             [tile addTarget:self action:@selector(presetTileTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-            UIImageView *swatch = [[UIImageView alloc] initWithImage:[self swatchImageWithPrimary:pal.a1 secondary:(isStatic ? pal.b1 : pal.a2)]];
+            UIImageView *swatch = [[UIImageView alloc] initWithImage:[self swatchImageWithPrimary:pal.a1 secondary:pal.a2]];
             swatch.translatesAutoresizingMaskIntoConstraints = NO;
             swatch.userInteractionEnabled = NO;
 
@@ -562,32 +549,15 @@ static char kDiagTextKey;
 #pragma mark - Actions
 
 - (void)presetTileTapped:(UIButton *)sender {
-    NSInteger raw = sender.tag;
-    BOOL isStatic = (raw >= 2000);
-    NSUInteger idx = (NSUInteger)(isStatic ? (raw - 2000) : (raw - 1000));
-    NSArray<NSString *> *names = isStatic ? LGPalette.staticNames : LGPalette.presetNames;
-    if (idx >= names.count) return;
+    NSInteger idxInt = sender.tag - 1000;
+    NSArray<NSString *> *names = LGPalette.presetNames;
+    if (idxInt < 0 || (NSUInteger)idxInt >= names.count) return;
 
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    if (isStatic) {
-        [d setObject:names[idx] forKey:@"LG_static_theme"];
-        [d setObject:@"static" forKey:@"LG_style"];
-        [d setBool:YES forKey:@"LG_static"];
-    } else {
-        [d setObject:names[idx] forKey:@"LG_theme"];
-        [d setObject:@"liquid" forKey:@"LG_style"];
-        [d setBool:NO forKey:@"LG_static"];
-    }
+    [d setObject:names[(NSUInteger)idxInt] forKey:@"LG_theme"];
+    [d setObject:@"liquid" forKey:@"LG_style"];
+    [d setBool:NO forKey:@"LG_static"];
     [d setBool:NO forKey:@"LG_ambient"];
-    [d synchronize];
-    [LGTheme.shared reload];
-}
-
-- (void)styleChanged:(UISegmentedControl *)sender {
-    BOOL isStatic = (sender.selectedSegmentIndex == 1);
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    [d setObject:(isStatic ? @"static" : @"liquid") forKey:@"LG_style"];
-    [d setBool:isStatic forKey:@"LG_static"];
     [d synchronize];
     [LGTheme.shared reload];
 }

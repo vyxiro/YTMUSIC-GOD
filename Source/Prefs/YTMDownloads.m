@@ -14,7 +14,7 @@
     self.tableView.backgroundColor = [UIColor clearColor];
     self.tableView.backgroundView = nil;
     self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
-    self.tableView.contentInset = UIEdgeInsetsMake(0.0f, 0.0f, 140.0f, 0.0f);
+    self.tableView.contentInset = UIEdgeInsetsMake(68.0f, 0.0f, 140.0f, 0.0f);
     [self.view addSubview:self.tableView];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -26,14 +26,67 @@
 
     [self maybeShowEmptyState];
     [self refreshAudioFiles];
+    [self updatePlaylistHeader];
 
     __weak typeof(self) weakSelf = self;
     self.themeObserver = LGObserveTheme(^(__unused LGPalette *palette, __unused BOOL dark, __unused BOOL staticMode) {
         [weakSelf applyThemeColors];
+        [weakSelf updatePlaylistHeader];
         [weakSelf.tableView reloadData];
     });
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadData) name:@"ReloadDataNotification" object:nil];
+}
+
+- (void)updatePlaylistHeader {
+    CGFloat w = self.view.bounds.size.width > 120.0f ? self.view.bounds.size.width : 390.0f;
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 108.0f)];
+    header.backgroundColor = [UIColor clearColor];
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16.0f, 8.0f, w - 32.0f, 92.0f)];
+    card.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    card.backgroundColor = [UIColor clearColor];
+    [header addSubview:card];
+
+    LGGlassView *glass = LGAttachGlass(card, 20.0f);
+    glass.frame = card.bounds;
+
+    LGPalette *p = LGTheme.shared.palette;
+    UIImage *coverImg = nil;
+    if (self.audioFiles.count > 0) {
+        NSString *imageName = [NSString stringWithFormat:@"%@.png", [self.audioFiles.firstObject stringByDeletingPathExtension]];
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        coverImg = [UIImage imageWithContentsOfFile:[[docs stringByAppendingPathComponent:@"YTMusicUltimate"] stringByAppendingPathComponent:imageName]];
+    }
+
+    UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(14.0f, 14.0f, 64.0f, 64.0f)];
+    art.layer.cornerRadius = 14.0f;
+    art.clipsToBounds = YES;
+    art.contentMode = coverImg ? UIViewContentModeScaleAspectFill : UIViewContentModeCenter;
+    if (coverImg) {
+        art.image = coverImg;
+    } else {
+        art.backgroundColor = [p.a1 ?: [UIColor systemBlueColor] colorWithAlphaComponent:0.25f];
+        art.image = [UIImage systemImageNamed:@"music.note.list"];
+        art.tintColor = p.a1 ?: [UIColor whiteColor];
+    }
+    [card addSubview:art];
+
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(92.0f, 22.0f, card.bounds.size.width - 108.0f, 24.0f)];
+    titleLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    titleLbl.text = LOC(@"DOWNLOADS") ?: @"Downloaded Playlist";
+    titleLbl.font = [UIFont systemFontOfSize:19.0f weight:UIFontWeightBold];
+    titleLbl.textColor = p.tx ?: [UIColor whiteColor];
+    [card addSubview:titleLbl];
+
+    UILabel *subLbl = [[UILabel alloc] initWithFrame:CGRectMake(92.0f, 48.0f, card.bounds.size.width - 108.0f, 20.0f)];
+    subLbl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    subLbl.text = [NSString stringWithFormat:@"%lu %@", (unsigned long)self.audioFiles.count, self.audioFiles.count == 1 ? @"song • Offline" : @"songs • Offline"];
+    subLbl.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightMedium];
+    subLbl.textColor = p.mu ?: [[UIColor whiteColor] colorWithAlphaComponent:0.75f];
+    [card addSubview:subLbl];
+
+    self.tableView.tableHeaderView = header;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -93,6 +146,7 @@
 
 - (void)reloadData {
     [self refreshAudioFiles];
+    [self updatePlaylistHeader];
     [self.tableView reloadData];
 }
 
@@ -119,11 +173,20 @@
 
 #pragma mark - Table view stuff
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section == 0 ? @"\n\n" : nil; //Temporary, see YTMTab.x
+    if (section == 0 && self.audioFiles.count > 0) return @"SAVED TRACKS";
+    if (section == 1 && self.audioFiles.count > 0) return @"PLAYLIST ACTIONS";
+    return nil;
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayHeaderView:(UIView *)view forSection:(NSInteger)section {
+    if ([view isKindOfClass:[UITableViewHeaderFooterView class]]) {
+        UITableViewHeaderFooterView *hf = (UITableViewHeaderFooterView *)view;
+        hf.textLabel.textColor = LGTheme.shared.palette.mu ?: [[UIColor whiteColor] colorWithAlphaComponent:0.75f];
+    }
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    return section == 1 ? @"\n\n\n" : nil; //Temporary, see YTMTab.x
+    return section == 1 ? @"\n" : nil;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -179,9 +242,19 @@
 
     if (indexPath.section == 0 && indexPath.row < self.audioFiles.count) {
         [self applyGlassBackgroundToCell:cell];
-        cell.textLabel.text = [self.audioFiles[indexPath.row] stringByDeletingPathExtension];
+        NSString *baseName = [self.audioFiles[indexPath.row] stringByDeletingPathExtension];
+        NSRange sep = [baseName rangeOfString:@" - "];
+        if (sep.location != NSNotFound) {
+            cell.textLabel.text = [baseName substringFromIndex:NSMaxRange(sep)];
+            cell.detailTextLabel.text = [baseName substringToIndex:sep.location];
+        } else {
+            cell.textLabel.text = baseName;
+            cell.detailTextLabel.text = @"Downloaded Track";
+        }
         cell.textLabel.numberOfLines = 0;
+        cell.textLabel.font = [UIFont systemFontOfSize:15.0f weight:UIFontWeightSemibold];
         cell.textLabel.textColor = p.tx ?: [UIColor whiteColor];
+        cell.detailTextLabel.textColor = p.mu ?: [[UIColor whiteColor] colorWithAlphaComponent:0.7f];
 
         NSString *imageName = [NSString stringWithFormat:@"%@.png", [self.audioFiles[indexPath.row] stringByDeletingPathExtension]];
         NSString *documentsDirectory = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
