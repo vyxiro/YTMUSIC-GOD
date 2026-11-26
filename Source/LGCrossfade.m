@@ -1,5 +1,6 @@
-// LGCrossfade.m : Crash-free equal-power crossfade state machine.
-// All AVPlayer creation/control and UI/queue advance happen exclusively on the main queue.
+// LGCrossfade.m : Apple Music-style equal-power Overlap + Smart Dip crossfade state machine.
+// Pre-buffers & silent-sync-spins outgoing AVPlayer tail (~16s before fade), unmutes at fade start,
+// advances native queue to incoming track, and mixes both streams with equal-power cos/sin curves.
 #import "LGCrossfade.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
@@ -11,16 +12,17 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 @implementation LGCrossfade {
     dispatch_queue_t _q;
     dispatch_source_t _tick, _ramp;
-    NSString *_key, *_liveTrackID, *_firedKey, *_prepKey, *_status;
+    NSString *_key, *_liveTrackID, *_firedKey, *_prepKey, *_syncKey, *_status;
     double _elapsed0, _rate, _total;
-    CFTimeInterval _wall0, _fadeOutStartWall, _fadeInDeadline;
+    CFTimeInterval _wall0, _fadeInDeadline;
     BOOL _busy, _inDipFadeOut, _inOverlap, _needFadeIn, _incomingTrackActivated;
 
     // Main-thread only tail overlap player state:
     AVPlayer *_tail;
-    BOOL _tailPreparing;
     BOOL _tailReady;
+    BOOL _tailSpinning;
     NSString *_tailKey;
+    NSString *_tailStreamKind;
 }
 
 + (LGCrossfade *)shared {
@@ -34,6 +36,7 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     if ((self = [super init])) {
         _q = dispatch_queue_create("lg.xfade", DISPATCH_QUEUE_SERIAL);
         _status = @"idle";
+        _tailStreamKind = @"none";
     }
     return self;
 }
@@ -63,18 +66,24 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 
 - (NSString *)status {
     NSString *st;
-    @synchronized(self) { st = _status ?: @"idle"; }
-    return [NSString stringWithFormat:@"Crossfade %@ (%.1fs) | gain %@  next %@  stream %@ | %@",
+    NSString *kind;
+    @synchronized(self) {
+        st = _status ?: @"idle";
+        kind = _tailStreamKind ?: @"none";
+    }
+    return [NSString stringWithFormat:@"Crossfade %@ (%.1fs) [%@] | %@",
             @[@"off", @"dip", @"overlap"][self.mode],
             self.seconds,
-            self.setNativeGain ? @"yes" : @"NO",
-            self.advanceToNext ? @"yes" : @"NO",
-            self.currentStreamURL ? @"yes" : @"NO",
+            kind,
             st];
 }
 
 - (void)setStatusText:(NSString *)s {
     @synchronized(self) { _status = [s copy]; }
+}
+
+- (void)setStreamKind:(NSString *)k {
+    @synchronized(self) { _tailStreamKind = [k copy]; }
 }
 
 - (void)applyGainMain:(float)gain {
@@ -106,8 +115,8 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     dispatch_async(_q, ^{
         BOOL newTrack = (self->_key && ![key isEqualToString:self->_key]);
         self->_key = key;
-        if (tot > 0) self->_total = tot;
-        if (el >= 0) {
+        if (tot > 0 && self->_total <= 0) self->_total = tot;
+        if (el >= 0 && fabs(el - (self->_elapsed0 + (CACurrentMediaTime() - self->_wall0))) > 1.2) {
             self->_elapsed0 = el;
             self->_wall0 = CACurrentMediaTime();
         }
@@ -148,7 +157,6 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
         BOOL newID = (trackID.length > 0 && ![trackID isEqualToString:self->_liveTrackID]);
         if (trackID.length > 0) self->_liveTrackID = trackID;
         if (self->_inOverlap) {
-            // Track B just became active during overlap: let incoming sine gain rise normally
             return;
         }
         if (newID || self->_needFadeIn || self->_inDipFadeOut) {
@@ -166,27 +174,23 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     dispatch_resume(_tick);
 }
 
-#pragma mark - State Machine (serialized on _q)
+#pragma mark - State Machine
 
 - (NSString *)activeTrackToken {
     return _liveTrackID.length ? _liveTrackID : (_key ?: @"");
 }
 
 - (void)handleTrackChangedFromSource:(NSString *)src {
-    // Ignore duplicate events within the active overlap ramp
     if (_inOverlap) {
         _incomingTrackActivated = YES;
         return;
     }
-
-    // If a Dip fade-out was still winding down as Track B already started, seamlessly switch into Fade-In!
     if (_inDipFadeOut) {
         if (_ramp) { dispatch_source_cancel(_ramp); _ramp = nil; }
         _inDipFadeOut = NO;
         _busy = NO;
         _needFadeIn = YES;
     }
-
     if (_busy) return;
     if (_ramp) { dispatch_source_cancel(_ramp); _ramp = nil; }
     [self teardownTail];
@@ -208,76 +212,167 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     if (!self.enabled || !self.setNativeGain || _rate <= 0 || _total <= 0 || _busy) return;
 
     double N = self.seconds;
-    if (_total < 2 * N + 2) return;
+    if (_total < N + 4.0) return;
 
     double elapsed = _elapsed0 + (CACurrentMediaTime() - _wall0) * _rate;
     double remaining = _total - elapsed;
     NSString *tok = [self activeTrackToken];
 
-    if (remaining > N + 16.0) {
+    if (remaining > N + 20.0) {
         _firedKey = nil;
         _prepKey = nil;
+        _syncKey = nil;
         if (_needFadeIn) [self fadeInNative];
         return;
     }
 
-    // Preload outgoing tail AVPlayer ~ (N + 12s) before end when Overlap adapters are available
-    if (remaining <= N + 14.0 && remaining > N + 1.0 &&
+    // Phase 1: Preload & buffer tail AVPlayer ~ (N + 16s) before end
+    if (remaining <= N + 18.0 && remaining > N + 2.5 &&
         self.mode == LGXfadeOverlap && ![_prepKey isEqualToString:tok]) {
         _prepKey = tok;
-        double seekPos = MAX(0.0, _total - N - 1.5);
+        double seekPos = MAX(0.0, _total - N - 3.0);
         [self prepareTailForTrack:tok seekTo:seekPos];
     }
 
+    // Phase 2: Silent Sync Pre-Roll ~ (N + 1.8s) before end so _tail is actively spinning at 0ms latency
+    if (remaining <= N + 2.0 && remaining > N + 0.25 &&
+        self.mode == LGXfadeOverlap && ![_syncKey isEqualToString:tok]) {
+        _syncKey = tok;
+        [self silentSpinTailForTrack:tok targetElapsed:elapsed];
+    }
+
+    // Phase 3: Fire equal-power transition at remaining <= N
     if (remaining <= N && remaining > 0.25 && ![_firedKey isEqualToString:tok]) {
         _firedKey = tok;
         [self fireTransitionWithRemaining:remaining trackToken:tok elapsed:elapsed];
     }
 }
 
-#pragma mark - Tail Preloader & Dual Transition (Main Thread Safe)
+#pragma mark - Tail Preload, Silent Sync Spin & Overlap Transition
+
+// Extract audio-only sub-playlist URL from YouTube HLS master manifest if needed
+static NSURL *LGResolveAudioOnlyURLIfHLS(NSURL *url, NSString **outKind) {
+    if (!url) return nil;
+    NSString *abs = url.absoluteString ?: @"";
+    if ([abs containsString:@"mime=audio"] || [abs containsString:@"itag=140"] || [abs containsString:@"itag=139"]) {
+        if (outKind) *outKind = @"mp4-audio";
+        return url;
+    }
+    if ([abs containsString:@".m3u8"] || [abs containsString:@"hls_playlist"]) {
+        NSData *data = [NSData dataWithContentsOfURL:url];
+        if (data.length > 0) {
+            NSString *txt = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            for (NSString *groupID in @[@"234", @"233"]) {
+                for (NSString *line in [txt componentsSeparatedByString:@"\n"]) {
+                    NSString *marker = [NSString stringWithFormat:@"TYPE=AUDIO,GROUP-ID=\"%@\"", groupID];
+                    if ([line containsString:marker]) {
+                        NSRange sr = [line rangeOfString:@"https://"];
+                        NSRange er = [line rangeOfString:@"index.m3u8"];
+                        if (sr.location != NSNotFound && er.location != NSNotFound && NSMaxRange(er) > sr.location) {
+                            NSString *sub = [line substringWithRange:NSMakeRange(sr.location, NSMaxRange(er) - sr.location)];
+                            if (outKind) *outKind = @"hls-audio";
+                            return [NSURL URLWithString:sub];
+                        }
+                    }
+                }
+            }
+        }
+        if (outKind) *outKind = @"hls-master";
+        return url;
+    }
+    if (outKind) *outKind = @"stream";
+    return url;
+}
 
 - (void)prepareTailForTrack:(NSString *)tok seekTo:(double)seekPos {
     NSURL *(^urlBlock)(void) = self.currentStreamURL;
     if (!urlBlock) return;
     __weak LGCrossfade *w = self;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         LGCrossfade *s = w;
         if (!s) return;
-        NSURL *url = urlBlock();
-        if (!url) {
-            [s setStatusText:@"tail skipped (no stream URL, will dip)"];
+        NSURL *rawURL = urlBlock();
+        if (!rawURL) {
+            [s setStreamKind:@"none"];
+            [s setStatusText:@"no stream URL -> will dip"];
             return;
         }
-        [s teardownTailSyncOnMain];
-        s->_tailPreparing = YES;
-        s->_tailReady = NO;
-        s->_tailKey = [tok copy];
+        [s setStatusText:@"resolving stream for tail..."];
 
-        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
-        AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
-        if (@available(iOS 10.0, *)) {
-            item.preferredForwardBufferDuration = 30.0;
-        }
-        AVPlayer *p = [AVPlayer playerWithPlayerItem:item];
-        objc_setAssociatedObject(p, "LGTailPlayer", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        p.volume = 0.0f;
-        p.muted = YES;
-        [p pause];
-        s->_tail = p;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSString *kind = @"stream";
+            NSURL *audioURL = LGResolveAudioOnlyURLIfHLS(rawURL, &kind);
+            [s setStreamKind:kind];
 
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!s || ![[s activeTrackToken] isEqualToString:tok]) return;
+                [s teardownTailSyncOnMain];
+                s->_tailReady = NO;
+                s->_tailSpinning = NO;
+                s->_tailKey = [tok copy];
+
+                AVURLAsset *asset = [AVURLAsset URLAssetWithURL:audioURL options:nil];
+                AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
+                if (@available(iOS 10.0, *)) {
+                    item.preferredForwardBufferDuration = 30.0;
+                }
+                AVPlayer *p = [AVPlayer playerWithPlayerItem:item];
+                p.automaticallyWaitsToMinimizeStalling = YES;
+                objc_setAssociatedObject(p, "LGTailPlayer", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                p.muted = YES;
+                p.volume = 0.0f;
+                [p pause];
+                s->_tail = p;
+
+                [s setStatusText:[NSString stringWithFormat:@"buffering %@ @ %.1fs", kind, seekPos]];
+                [s pollAndSeekTailPlayer:p item:item seekPos:seekPos attemptsLeft:24];
+            });
+        });
+    });
+}
+
+- (void)pollAndSeekTailPlayer:(AVPlayer *)p item:(AVPlayerItem *)item seekPos:(double)seekPos attemptsLeft:(int)attempts {
+    if (_tail != p || attempts <= 0) return;
+    if (item.status == AVPlayerItemStatusFailed) {
+        [self setStatusText:[NSString stringWithFormat:@"tail failed (%@)", item.error.localizedDescription ?: @"err"]];
+        return;
+    }
+    if (item.status == AVPlayerItemStatusReadyToPlay) {
         CMTime target = CMTimeMakeWithSeconds(seekPos, 600);
-        CMTime tol = CMTimeMakeWithSeconds(0.5, 600);
+        CMTime tol = CMTimeMakeWithSeconds(0.4, 600);
         [p seekToTime:target toleranceBefore:tol toleranceAfter:tol completionHandler:^(BOOL finished) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (s->_tail == p) {
-                    s->_tailPreparing = NO;
-                    s->_tailReady = (finished && item.status != AVPlayerItemStatusFailed);
-                    if (s->_tailReady) {
-                        [s setStatusText:[NSString stringWithFormat:@"tail buffered @ %.1fs", seekPos]];
-                    } else {
-                        [s setStatusText:@"tail preload failed (will dip)"];
-                    }
+                if (self->_tail == p && item.status == AVPlayerItemStatusReadyToPlay) {
+                    self->_tailReady = YES;
+                    [self setStatusText:[NSString stringWithFormat:@"tail ready @ %.1fs (ok=%d)", seekPos, finished]];
+                }
+            });
+        }];
+        return;
+    }
+    __weak LGCrossfade *w = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(250 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [w pollAndSeekTailPlayer:p item:item seekPos:seekPos attemptsLeft:(attempts - 1)];
+    });
+}
+
+- (void)silentSpinTailForTrack:(NSString *)tok targetElapsed:(double)elapsed {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AVPlayer *tail = self->_tail;
+        if (!tail || ![self->_tailKey isEqualToString:tok] || !self->_tailReady) return;
+        if (tail.currentItem.status != AVPlayerItemStatusReadyToPlay) return;
+
+        CMTime syncPos = CMTimeMakeWithSeconds(MAX(0.0, elapsed + 0.12), 600);
+        CMTime tol = CMTimeMakeWithSeconds(0.15, 600);
+        [tail seekToTime:syncPos toleranceBefore:tol toleranceAfter:tol completionHandler:^(__unused BOOL ok) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (self->_tail == tail && !self->_inOverlap) {
+                    tail.muted = YES;
+                    tail.volume = 0.0f;
+                    [tail play];
+                    self->_tailSpinning = YES;
+                    [self setStatusText:@"tail synced & spinning"];
                 }
             });
         }];
@@ -286,13 +381,14 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 
 - (void)fireTransitionWithRemaining:(double)remaining trackToken:(NSString *)tok elapsed:(double)elapsed {
     _busy = YES;
-    double N = LGXClamp(remaining, 0.8, self.seconds);
+    double N = LGXClamp(remaining, 1.0, self.seconds);
     BOOL (^advanceBlock)(void) = self.advanceToNext;
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        BOOL canOverlap = (self->_tail && [self->_tailKey isEqualToString:tok] &&
+        AVPlayer *tail = self->_tail;
+        BOOL canOverlap = (tail && [self->_tailKey isEqualToString:tok] &&
                            self->_tailReady &&
-                           self->_tail.currentItem.status == AVPlayerItemStatusReadyToPlay &&
+                           tail.currentItem.status == AVPlayerItemStatusReadyToPlay &&
                            advanceBlock != nil);
 
         if (canOverlap) {
@@ -316,33 +412,39 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     dispatch_async(_q, ^{
         self->_inOverlap = YES;
         self->_incomingTrackActivated = NO;
-        [self setStatusText:@"crossfading (overlap)"];
+        [self setStatusText:@"overlap handoff..."];
     });
 
-    CMTime exactPos = CMTimeMakeWithSeconds(MAX(0.0, elapsed), 600);
-    CMTime tol = CMTimeMakeWithSeconds(0.2, 600);
-    [tail seekToTime:exactPos toleranceBefore:tol toleranceAfter:tol completionHandler:^(__unused BOOL ok) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self->_tail != tail) return;
-            tail.muted = NO;
-            tail.volume = 1.0f;
-            [tail play];
+    void (^startMix)(void) = ^{
+        if (self->_tail != tail) return;
+        // 1. Bring spun-up tail up cleanly while briefly holding native audio (60ms handoff -> zero click/gap)
+        tail.muted = NO;
+        tail.volume = 1.0f;
+        if (tail.rate <= 0.01f) [tail play];
 
-            // Mute outgoing native player cleanly, then trigger next track on main thread
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(70 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            if (self->_tail != tail) return;
+            // 2. Silence outgoing native renderer & trigger YouTube Music to advance to Track B
             [self applyGainMain:0.0f];
             BOOL advanced = advanceBlock ? advanceBlock() : NO;
-            if (!advanced) {
-                // If advance failed, gracefully fall back to letting tail fade out
-                [self setStatusText:@"overlap advance failed -> fade out"];
-            }
+            [self setStatusText:advanced ? @"crossfading (overlap)" : @"overlap (advance blocked)"];
 
             CFTimeInterval advanceStart = CACurrentMediaTime();
+            __block CFTimeInterval inStartWall = 0.0;
+
             dispatch_async(self->_q, ^{
                 [self rampOver:duration step:^(double t) {
                     float outGain = (float)cos(t * M_PI_2);
-                    float inGain = (self->_incomingTrackActivated || (CACurrentMediaTime() - advanceStart) > 0.45)
-                        ? (float)sin(t * M_PI_2)
-                        : 0.0f;
+
+                    BOOL trackBReady = self->_incomingTrackActivated || ((CACurrentMediaTime() - advanceStart) > 1.25);
+                    float inGain = 0.0f;
+                    if (trackBReady) {
+                        if (inStartWall <= 0.0) inStartWall = CACurrentMediaTime();
+                        double remDur = MAX(0.8, duration - (inStartWall - advanceStart));
+                        double inT = MIN(1.0, (CACurrentMediaTime() - inStartWall) / remDur);
+                        inGain = (float)sin(inT * M_PI_2);
+                    }
+
                     dispatch_async(dispatch_get_main_queue(), ^{
                         if (self->_tail == tail) tail.volume = outGain;
                     });
@@ -357,23 +459,30 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
                 }];
             });
         });
-    }];
+    };
+
+    if (_tailSpinning && tail.rate > 0.01f) {
+        startMix();
+    } else {
+        CMTime exactPos = CMTimeMakeWithSeconds(MAX(0.0, elapsed + 0.08), 600);
+        CMTime tol = CMTimeMakeWithSeconds(0.2, 600);
+        [tail seekToTime:exactPos toleranceBefore:tol toleranceAfter:tol completionHandler:^(__unused BOOL ok) {
+            dispatch_async(dispatch_get_main_queue(), startMix);
+        }];
+    }
 }
 
 - (void)beginDipFadeOut:(double)remaining {
     _inDipFadeOut = YES;
-    _fadeOutStartWall = CACurrentMediaTime();
     [self setStatusText:@"fading out (dip)"];
 
-    // Reserve a tiny margin so we reach ~0 right as track ends instead of 2s early silence
     double fadeDur = LGXClamp(remaining * 0.90, 0.5, self.seconds);
     BOOL (^advanceBlock)(void) = self.advanceToNext;
     __block BOOL didTriggerAdvance = NO;
 
     [self rampOver:fadeDur step:^(double t) {
         [self applyGainMain:(float)cos(t * M_PI_2)];
-        // Trigger queue advance smoothly near the end of fade-out so Track B starts immediately with no long gap
-        if (t >= 0.94 && !didTriggerAdvance && advanceBlock) {
+        if (t >= 0.92 && !didTriggerAdvance && advanceBlock) {
             didTriggerAdvance = YES;
             dispatch_async(dispatch_get_main_queue(), ^{
                 advanceBlock();
@@ -383,7 +492,7 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
         self->_inDipFadeOut = NO;
         [self applyGainMain:0.0f];
         self->_needFadeIn = YES;
-        self->_fadeInDeadline = CACurrentMediaTime() + 12.0;
+        self->_fadeInDeadline = CACurrentMediaTime() + 10.0;
         self->_busy = NO;
         [self setStatusText:@"waiting for next track"];
     }];
@@ -394,7 +503,7 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     _inDipFadeOut = NO;
     _busy = YES;
     [self setStatusText:@"fading in"];
-    double inDur = LGXClamp(self.seconds * 0.55, 0.6, 3.5);
+    double inDur = LGXClamp(self.seconds * 0.60, 0.8, 4.0);
     [self rampOver:inDur step:^(double t) {
         [self applyGainMain:(float)sin(t * M_PI_2)];
     } done:^{
@@ -425,8 +534,8 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 - (void)teardownTailSyncOnMain {
     AVPlayer *p = _tail;
     _tail = nil;
-    _tailPreparing = NO;
     _tailReady = NO;
+    _tailSpinning = NO;
     _tailKey = nil;
     if (p) {
         @try {

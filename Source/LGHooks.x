@@ -162,6 +162,8 @@ NSString *LGBuildDiagnosticReport(void) {
         NSString *s = [NSString stringWithUTF8String:cname];
         if ([s containsString:@"HAMAudio"] || [s containsString:@"HAMPlayer"] ||
             [s containsString:@"HAMQueue"] || [s containsString:@"YTMQueue"] ||
+            [s containsString:@"MLHAMQueue"] || [s containsString:@"AudioFade"] ||
+            [s containsString:@"AudioTrackRenderer"] ||
             [s isEqualToString:@"YTPlayerViewController"] || [s isEqualToString:@"AVAudioEngine"]) {
             unsigned int mc = 0;
             Method *ms = class_copyMethodList(classes[i], &mc);
@@ -170,13 +172,15 @@ NSString *LGBuildDiagnosticReport(void) {
                 NSString *sel = NSStringFromSelector(method_getName(ms[m]));
                 if ([sel localizedCaseInsensitiveContainsString:@"volume"] ||
                     [sel localizedCaseInsensitiveContainsString:@"gain"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"fade"] ||
+                    [sel localizedCaseInsensitiveContainsString:@"clip"] ||
                     [sel localizedCaseInsensitiveContainsString:@"next"] ||
                     [sel localizedCaseInsensitiveContainsString:@"advance"] ||
                     [sel localizedCaseInsensitiveContainsString:@"player"] ||
                     [sel localizedCaseInsensitiveContainsString:@"audio"] ||
                     [sel localizedCaseInsensitiveContainsString:@"render"]) {
                     [interestingSel addObject:sel];
-                    if (interestingSel.count >= 8) break;
+                    if (interestingSel.count >= 24) break;
                 }
             }
             if (ms) free(ms);

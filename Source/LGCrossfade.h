@@ -1,6 +1,6 @@
 // LGCrossfade.h : Apple Music-style equal-power crossfade engine (1-12s, default 6s).
-// Supports seamless dual-stream Overlap via main-thread preloaded AVPlayer tail + automatic smart Dip fallback.
-// Settings keys: LG_xfade (BOOL), LG_xfade_secs (double 1...12, default 6).
+// Preloads & sync-spins outgoing tail AVPlayer silently before fade point for zero-gap true Overlap,
+// with automatic smart Dip fallback if stream URL is unavailable.
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 

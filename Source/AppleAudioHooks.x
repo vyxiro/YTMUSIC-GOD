@@ -80,20 +80,28 @@ static NSURL *YTMExtractBestAudioStreamURL(YTPlayerViewController *pvc) {
         YTIStreamingData *sd = resp.playerData.streamingData;
         if (!sd) return nil;
 
-        // Prefer progressive audio/mp4 stream URL (instant seek & low memory in AVPlayer tail)
+        // Prefer progressive audio/mp4 stream URL (checking both mimeType selector & URL query params)
         if ([sd respondsToSelector:@selector(adaptiveFormatsArray)]) {
+            NSURL *fallbackWebMOrOther = nil;
             for (YTIFormatStream *fs in sd.adaptiveFormatsArray) {
                 NSString *urlStr = [fs respondsToSelector:@selector(URL)] ? fs.URL : nil;
                 if (urlStr.length == 0) continue;
-                if ([fs respondsToSelector:@selector(mimeType)]) {
-                    NSString *mime = [fs performSelector:@selector(mimeType)];
-                    if ([mime isKindOfClass:[NSString class]] && [mime containsString:@"audio/mp4"]) {
-                        return [NSURL URLWithString:urlStr];
-                    }
+                NSString *mime = [fs respondsToSelector:@selector(mimeType)] ? [fs performSelector:@selector(mimeType)] : nil;
+                BOOL isAudioMP4 = ([mime isKindOfClass:[NSString class]] && [mime containsString:@"audio/mp4"]) ||
+                                  [urlStr containsString:@"mime=audio%2Fmp4"] ||
+                                  [urlStr containsString:@"mime=audio/mp4"] ||
+                                  [urlStr containsString:@"itag=140"] ||
+                                  [urlStr containsString:@"itag=139"];
+                if (isAudioMP4) {
+                    return [NSURL URLWithString:urlStr];
+                }
+                if (!fallbackWebMOrOther && ([urlStr containsString:@"mime=audio"] || ([mime isKindOfClass:[NSString class]] && [mime hasPrefix:@"audio/"]))) {
+                    fallbackWebMOrOther = [NSURL URLWithString:urlStr];
                 }
             }
+            // Note: AVPlayer cannot decode WebM/Opus, so prefer HLS audio over WebM if MP4 wasn't found
         }
-        // Fallback to HLS manifest URL
+        // Fallback to HLS manifest URL (LGCrossfade resolves audio-only sub-playlist from it)
         if ([sd respondsToSelector:@selector(hlsManifestURL)] && sd.hlsManifestURL.length > 0) {
             return [NSURL URLWithString:sd.hlsManifestURL];
         }
