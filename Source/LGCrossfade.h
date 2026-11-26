@@ -12,6 +12,8 @@ typedef NS_ENUM(NSInteger, LGXfadeMode) { LGXfadeOff = 0, LGXfadeDip = 1, LGXfad
 @property (nonatomic, readonly) NSTimeInterval seconds;
 @property (nonatomic, readonly) LGXfadeMode mode;
 @property (nonatomic, readonly) NSString *status;
+@property (nonatomic, assign) BOOL nativeMultiPlayerActive;
+@property (nonatomic, copy) NSString *nativeStatusDetail;
 
 // ---- adapters ----
 @property (nonatomic, copy) void (^setNativeGain)(float gain);

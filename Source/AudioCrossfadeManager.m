@@ -1,6 +1,8 @@
 #import "AudioCrossfadeManager.h"
 #import <math.h>
 
+extern void YTMNotifyNativeCrossfadeSettingsChanged(BOOL enabled, double duration);
+
 static NSString * const kYTMUltimateKey = @"YTMUltimate";
 static NSString * const kCrossfadeKey = @"appleCrossfade";
 static NSString * const kCrossfadeDurationKey = @"appleCrossfadeDuration";
@@ -70,6 +72,7 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
     [defaults setBool:self.crossfadeEnabled forKey:@"LG_xfade"];
     [defaults setDouble:(double)self.crossfadeDuration forKey:@"LG_xfade_secs"];
     [defaults synchronize];
+    YTMNotifyNativeCrossfadeSettingsChanged(self.crossfadeEnabled, (double)self.crossfadeDuration);
 }
 
 #pragma mark - Registration & State Management
@@ -105,28 +108,7 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
     }
     self.currentVideoID = videoID;
     [self loadSettings];
-
-    // If manual skip was triggered, resume full volume immediately without crossfade in
-    if (self.isManualSkip || !self.crossfadeEnabled) {
-        if (self.activePlayer) {
-            self.activePlayer.volume = self.baseVolume;
-        }
-        [self resetFaders];
-        return;
-    }
-
-    // Begin Apple Music-style equal-power fade-in on incoming audio stream
-    if (self.activePlayer) {
-        self.activePlayer.volume = 0.0f;
-        self.isFadingOut = NO;
-        self.isFadingIn = YES;
-        self.isCrossfading = YES;
-        self.fadeStartTime = CACurrentMediaTime();
-
-        [self stopDisplayLink];
-        self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(handleFadeTick:)];
-        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    }
+    [self resetFaders];
 }
 
 #pragma mark - Playback Time Tracking & Equal-Power Crossfade

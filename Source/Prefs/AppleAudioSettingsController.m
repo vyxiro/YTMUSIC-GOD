@@ -197,7 +197,7 @@ extern NSString *YTMObservedAudioBackend(void);
     [AudioCrossfadeManager sharedInstance].crossfadeEnabled = sender.isOn;
     [[AudioCrossfadeManager sharedInstance] saveSettings];
     if (!sender.isOn) [[LGCrossfade shared] cancel];
-    self.crossfadeStatusLabel.text = LGCrossfade.shared.status;
+    [self refreshCrossfadeStatus];
 }
 
 - (void)crossfadeSliderChanged:(UISlider *)sender {
@@ -205,7 +205,7 @@ extern NSString *YTMObservedAudioBackend(void);
     [AudioCrossfadeManager sharedInstance].crossfadeDuration = rounded;
     [[AudioCrossfadeManager sharedInstance] saveSettings];
     self.crossfadeDurationLabel.text = [NSString stringWithFormat:@"Crossfade Duration: %.1f s", rounded];
-    self.crossfadeStatusLabel.text = LGCrossfade.shared.status;
+    [self refreshCrossfadeStatus];
 }
 
 - (void)gaplessToggled:(UISwitch *)sender {

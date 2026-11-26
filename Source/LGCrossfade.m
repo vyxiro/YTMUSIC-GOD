@@ -23,6 +23,8 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
     BOOL _tailSpinning;
     NSString *_tailKey;
     NSString *_tailStreamKind;
+    BOOL _nativeMultiPlayerActive;
+    NSString *_nativeStatusDetail;
 }
 
 + (LGCrossfade *)shared {
@@ -37,8 +39,25 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
         _q = dispatch_queue_create("lg.xfade", DISPATCH_QUEUE_SERIAL);
         _status = @"idle";
         _tailStreamKind = @"none";
+        _nativeStatusDetail = @"initializing";
     }
     return self;
+}
+
+- (void)setNativeMultiPlayerActive:(BOOL)active {
+    @synchronized(self) { _nativeMultiPlayerActive = active; }
+}
+
+- (BOOL)nativeMultiPlayerActive {
+    @synchronized(self) { return _nativeMultiPlayerActive; }
+}
+
+- (void)setNativeStatusDetail:(NSString *)detail {
+    @synchronized(self) { _nativeStatusDetail = [detail copy]; }
+}
+
+- (NSString *)nativeStatusDetail {
+    @synchronized(self) { return _nativeStatusDetail ?: @"ready"; }
 }
 
 - (BOOL)enabled {
@@ -60,16 +79,28 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 }
 
 - (LGXfadeMode)mode {
-    if (!self.enabled || !self.setNativeGain) return LGXfadeOff;
+    if (!self.enabled) return LGXfadeOff;
+    if (self.nativeMultiPlayerActive) return LGXfadeOverlap;
+    if (!self.setNativeGain) return LGXfadeOff;
     return (self.advanceToNext && self.currentStreamURL) ? LGXfadeOverlap : LGXfadeDip;
 }
 
 - (NSString *)status {
     NSString *st;
     NSString *kind;
+    BOOL nativeActive;
+    NSString *nativeDet;
     @synchronized(self) {
         st = _status ?: @"idle";
         kind = _tailStreamKind ?: @"none";
+        nativeActive = _nativeMultiPlayerActive;
+        nativeDet = _nativeStatusDetail ?: @"ready";
+    }
+    if (!self.enabled) {
+        return [NSString stringWithFormat:@"Crossfade off (%.1fs)", self.seconds];
+    }
+    if (nativeActive) {
+        return [NSString stringWithFormat:@"Crossfade Native Dual-Deck (%.1fs) | %@", self.seconds, nativeDet];
     }
     return [NSString stringWithFormat:@"Crossfade %@ (%.1fs) [%@] | %@",
             @[@"off", @"dip", @"overlap"][self.mode],
@@ -204,6 +235,13 @@ static inline double LGXClamp(double x, double lo, double hi) { return MAX(lo, M
 }
 
 - (void)evaluate {
+    if (self.nativeMultiPlayerActive) {
+        // Native MLHAMMultiPlayer + YTPersistentAudioFadeController handles dual-deck hardware crossfade cleanly.
+        if (_busy || _tail) {
+            [self cancel];
+        }
+        return;
+    }
     if (_needFadeIn && CACurrentMediaTime() > _fadeInDeadline) {
         _needFadeIn = NO;
         [self applyGainMain:1.0f];

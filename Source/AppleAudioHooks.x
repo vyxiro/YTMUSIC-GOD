@@ -23,6 +23,9 @@
 
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 static __weak id gCurrentNowPlayingVC = nil;
+static __weak id gYTMSettings = nil;
+static __weak id gActiveSequencer = nil;
+static __weak id gActiveMultiPlayer = nil;
 static NSURL *gCurrentTrackStreamURL = nil;
 static NSString *gCurrentStreamVideoID = nil;
 
@@ -33,6 +36,7 @@ static NSHashTable *gTrackedEngines = nil;
 static NSString *gAudioLock = @"YTM_AUDIO_LOCK";
 static float gCurrentNativeGain = 1.0f;
 static __thread BOOL tApplyingNativeGain = NO;
+static __thread BOOL tSyncingNativeSettings = NO;
 static BOOL gProgrammaticAdvance = NO;
 static NSString *gObservedAudioBackend = @"none yet";
 
@@ -43,6 +47,61 @@ static NSString *gObservedAudioBackend = @"none yet";
 @interface HAMPlayer : NSObject
 @property (nonatomic, assign) float volume;
 @end
+
+@interface YTMSettingsImpl : NSObject
+- (BOOL)isCrossfadeEnabled;
+- (void)setCrossfadeEnabled:(BOOL)enabled;
+- (NSInteger)crossfadeDuration;
+- (void)setCrossfadeDuration:(NSInteger)duration;
+@end
+
+@interface YTMPlayerSequencerController : NSObject
+- (void)updateCrossfadeTransitionInActiveSequence;
+@end
+
+@interface YTCrossfadeTransition : NSObject
+- (instancetype)initWithDuration:(double)duration;
+@end
+
+@interface MLHAMQueuePlayerContext : NSObject
+@property (nonatomic, assign) double crossfadeDuration;
+@end
+
+@interface YTIPlayerResponse (LGCrossfadeNative)
+- (id)trackAlbumMetadata;
+@end
+
+@interface LGAlbumMeta : NSObject
+- (NSString *)externalPlaylistId;
+- (BOOL)hasTrackNumber;
+- (int32_t)trackNumber;
+- (BOOL)isLive;
+@end
+
+void YTMNotifyNativeCrossfadeSettingsChanged(BOOL enabled, double duration) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id settings = gYTMSettings;
+        id seq = gActiveSequencer;
+        tSyncingNativeSettings = YES;
+        @try {
+            if (settings) {
+                if ([settings respondsToSelector:@selector(setCrossfadeEnabled:)]) {
+                    [(YTMSettingsImpl *)settings setCrossfadeEnabled:enabled];
+                }
+                if ([settings respondsToSelector:@selector(setCrossfadeDuration:)]) {
+                    [(YTMSettingsImpl *)settings setCrossfadeDuration:(NSInteger)MAX(1, llround(duration))];
+                }
+            }
+            if (seq && [seq respondsToSelector:@selector(updateCrossfadeTransitionInActiveSequence)]) {
+                [(YTMPlayerSequencerController *)seq updateCrossfadeTransitionInActiveSequence];
+            }
+        } @catch (__unused NSException *e) {}
+        tSyncingNativeSettings = NO;
+        [LGCrossfade shared].nativeStatusDetail = enabled
+            ? [NSString stringWithFormat:@"armed (%.1fs)", duration]
+            : @"disabled";
+    });
+}
 
 NSString *YTMObservedAudioBackend(void) {
     @synchronized(gAudioLock) {
@@ -477,6 +536,288 @@ static void YTMFeedLiveCrossfadeTime(YTPlayerViewController *pvc, CGFloat curren
 
 %end
 
+#pragma mark - Native YouTube Music Dual-Deck Crossfade Unlock & Telemetry
+
+%group NativeXfadeSharedConfigGroup
+%hook YTColdConfigIosPlayerClientSharedConfigImpl
+
+- (BOOL)enableCrossfade {
+    return YES;
+}
+
+- (BOOL)enableVolumeFading {
+    return YES;
+}
+
+%end
+%end
+
+%group NativeXfadePlaybackConfigGroup
+%hook YTColdConfigMusicPlaybackClientConfigImpl
+
+- (BOOL)iosEnableCrossfade {
+    return YES;
+}
+
+%end
+%end
+
+%group NativeXfadeSettingsGroup
+%hook YTMSettingsImpl
+
+- (BOOL)isCrossfadeEnabled {
+    gYTMSettings = self;
+    return [LGCrossfade shared].enabled;
+}
+
+- (NSInteger)crossfadeDuration {
+    gYTMSettings = self;
+    return (NSInteger)MAX(1, llround([LGCrossfade shared].seconds));
+}
+
+- (void)setCrossfadeEnabled:(BOOL)enabled {
+    gYTMSettings = self;
+    %orig(enabled);
+    if (!tSyncingNativeSettings) {
+        [AudioCrossfadeManager sharedInstance].crossfadeEnabled = enabled;
+        [[AudioCrossfadeManager sharedInstance] saveSettings];
+    }
+}
+
+- (void)setCrossfadeDuration:(NSInteger)duration {
+    gYTMSettings = self;
+    %orig(duration);
+    if (!tSyncingNativeSettings && duration >= 1 && duration <= 12) {
+        [AudioCrossfadeManager sharedInstance].crossfadeDuration = (CGFloat)duration;
+        [[AudioCrossfadeManager sharedInstance] saveSettings];
+    }
+}
+
+%end
+%end
+
+%group NativeXfadeUserDefaultsGroup
+%hook YTUserDefaults
+
+- (BOOL)isCrossfadeEnabled {
+    return [LGCrossfade shared].enabled;
+}
+
+- (NSInteger)crossfadeDuration {
+    return (NSInteger)MAX(1, llround([LGCrossfade shared].seconds));
+}
+
+%end
+%end
+
+%group NativeXfadePolicyGroup
+%hook YTMCrossfadeTransitionPolicy
+
++ (BOOL)isCrossfadeTransitionEnabledForCurrentPlayerResponse:(id)curr upcomingPlayerResponse:(id)next {
+    if (![LGCrossfade shared].enabled || !curr || !next) {
+        return NO;
+    }
+    @try {
+        id currData = [curr respondsToSelector:@selector(playerData)] ? [(YTPlayerResponse *)curr playerData] : nil;
+        id nextData = [next respondsToSelector:@selector(playerData)] ? [(YTPlayerResponse *)next playerData] : nil;
+        if (!currData || !nextData) return NO;
+
+        id vd1 = [currData respondsToSelector:@selector(videoDetails)] ? [(YTIPlayerResponse *)currData videoDetails] : nil;
+        id vd2 = [nextData respondsToSelector:@selector(videoDetails)] ? [(YTIPlayerResponse *)nextData videoDetails] : nil;
+        if ((vd1 && [vd1 respondsToSelector:@selector(isLive)] && [(LGAlbumMeta *)vd1 isLive]) ||
+            (vd2 && [vd2 respondsToSelector:@selector(isLive)] && [(LGAlbumMeta *)vd2 isLive])) {
+            [LGCrossfade shared].nativeStatusDetail = @"skipped (live stream)";
+            return NO;
+        }
+
+        if ([AudioCrossfadeManager sharedInstance].gaplessBypassEnabled) {
+            id m1 = [currData respondsToSelector:@selector(trackAlbumMetadata)] ? [(YTIPlayerResponse *)currData trackAlbumMetadata] : nil;
+            id m2 = [nextData respondsToSelector:@selector(trackAlbumMetadata)] ? [(YTIPlayerResponse *)nextData trackAlbumMetadata] : nil;
+            NSString *p1 = (m1 && [m1 respondsToSelector:@selector(externalPlaylistId)]) ? [(LGAlbumMeta *)m1 externalPlaylistId] : nil;
+            NSString *p2 = (m2 && [m2 respondsToSelector:@selector(externalPlaylistId)]) ? [(LGAlbumMeta *)m2 externalPlaylistId] : nil;
+            if (p1.length > 0 && [p1 isEqualToString:p2] &&
+                [m1 respondsToSelector:@selector(hasTrackNumber)] && [(LGAlbumMeta *)m1 hasTrackNumber] &&
+                [m2 respondsToSelector:@selector(hasTrackNumber)] && [(LGAlbumMeta *)m2 hasTrackNumber]) {
+                int32_t t1 = [(LGAlbumMeta *)m1 trackNumber];
+                int32_t t2 = [(LGAlbumMeta *)m2 trackNumber];
+                if (t2 == t1 + 1) {
+                    [LGCrossfade shared].nativeStatusDetail = @"gapless album track (bypassed)";
+                    return NO;
+                }
+            }
+        }
+    } @catch (__unused NSException *e) {}
+
+    [LGCrossfade shared].nativeStatusDetail = [NSString stringWithFormat:@"armed (%.1fs)", [LGCrossfade shared].seconds];
+    return YES;
+}
+
+%end
+%end
+
+%group NativeXfadeSequencerGroup
+%hook YTMPlayerSequencerController
+
+- (instancetype)initWithPlayerViewController:(id)pvc {
+    id obj = %orig;
+    if (obj) {
+        gActiveSequencer = obj;
+        @try {
+            [obj setValue:@YES forKey:@"_enableCrossfade"];
+        } @catch (__unused NSException *e) {}
+    }
+    return obj;
+}
+
+- (void)setQueueController:(id)qc {
+    %orig;
+    gActiveSequencer = self;
+}
+
+- (id)crossfadeTransitionFromSettings {
+    if (![LGCrossfade shared].enabled) return nil;
+    Class cls = objc_getClass("YTCrossfadeTransition");
+    if (cls) {
+        double secs = [LGCrossfade shared].seconds;
+        return [[cls alloc] initWithDuration:secs];
+    }
+    return %orig;
+}
+
+- (void)updateCrossfadeTransitionInActiveSequence {
+    gActiveSequencer = self;
+    %orig;
+    [LGCrossfade shared].nativeStatusDetail = [LGCrossfade shared].enabled
+        ? [NSString stringWithFormat:@"armed (%.1fs)", [LGCrossfade shared].seconds]
+        : @"disabled";
+}
+
+%end
+%end
+
+%group MLHAMMultiGroup
+%hook MLHAMMultiPlayer
+
+- (instancetype)initWithStickySettings:(id)a playerViewProvider:(id)b mediaPlayerResources:(id)c {
+    id obj = %orig;
+    if (obj) {
+        gActiveMultiPlayer = obj;
+        YTMInstallCrossfadeAdapters();
+        @synchronized(gAudioLock) {
+            [gTrackedHAMPlayers addObject:obj];
+            gObservedAudioBackend = @"MLHAMMultiPlayer (Native Dual-Deck)";
+        }
+        [LGCrossfade shared].nativeMultiPlayerActive = YES;
+        [LGCrossfade shared].nativeStatusDetail = [LGCrossfade shared].enabled
+            ? [NSString stringWithFormat:@"armed (%.1fs)", [LGCrossfade shared].seconds]
+            : @"disabled";
+    }
+    return obj;
+}
+
+- (void)load {
+    %orig;
+    gActiveMultiPlayer = self;
+    [LGCrossfade shared].nativeMultiPlayerActive = YES;
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+        gObservedAudioBackend = @"MLHAMMultiPlayer (Native Dual-Deck)";
+    }
+}
+
+- (BOOL)shouldApplyTransitionEffect:(id)effect previousClip:(id)prevClip toClip:(id)toClip {
+    BOOL apply = %orig;
+    [LGCrossfade shared].nativeMultiPlayerActive = YES;
+    if (!apply && [LGCrossfade shared].enabled) {
+        [LGCrossfade shared].nativeStatusDetail = @"transition skipped (route/policy)";
+    }
+    return apply;
+}
+
+- (void)spawnCrossfadeWithActiveContext:(id)activeCtx activeClip:(id)activeClip nextContext:(id)nextCtx {
+    double dur = 0.0;
+    @try {
+        if (nextCtx && [nextCtx respondsToSelector:@selector(crossfadeDuration)]) {
+            dur = [(MLHAMQueuePlayerContext *)nextCtx crossfadeDuration];
+        }
+    } @catch (__unused NSException *e) {}
+    [LGCrossfade shared].nativeMultiPlayerActive = YES;
+    [LGCrossfade shared].nativeStatusDetail = [NSString stringWithFormat:@"OVERLAP MIXING (%.1fs)!", dur > 0 ? dur : [LGCrossfade shared].seconds];
+    %orig;
+    double resetAfter = MAX(1.5, (dur > 0 ? dur : [LGCrossfade shared].seconds) + 0.5);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(resetAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if ([LGCrossfade shared].nativeMultiPlayerActive) {
+            [LGCrossfade shared].nativeStatusDetail = [LGCrossfade shared].enabled
+                ? [NSString stringWithFormat:@"armed (%.1fs)", [LGCrossfade shared].seconds]
+                : @"disabled";
+        }
+    });
+}
+
+- (void)logCrossfadeTransitionRejected:(id)reason previousClip:(id)prevClip toClip:(id)toClip {
+    %orig;
+    [LGCrossfade shared].nativeStatusDetail = [NSString stringWithFormat:@"rejected: %@", reason ?: @"unknown"];
+}
+
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+        gObservedAudioBackend = @"MLHAMMultiPlayer (Native Dual-Deck)";
+    }
+    %orig(volume * gCurrentNativeGain);
+}
+
+%end
+%end
+
+%group MLHAMQueueGroup
+%hook MLHAMQueuePlayer
+
+- (void)setStartedTrackRenderers:(id)arg1 {
+    %orig;
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+        if (!gActiveMultiPlayer) gObservedAudioBackend = @"MLHAMQueuePlayer+HAMSBAR";
+    }
+    if (gCurrentNativeGain < 0.999f) YTMApplyNativeGainToObject(self, gCurrentNativeGain);
+}
+
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+    }
+    %orig(volume * gCurrentNativeGain);
+}
+
+%end
+%end
+
+%group HAMSBARGroup
+%hook HAMSBARAudioTrackRenderer
+
+- (void)setVolume:(float)volume {
+    if (tApplyingNativeGain) {
+        %orig(volume);
+        return;
+    }
+    @synchronized(gAudioLock) {
+        if (![gTrackedRenderers containsObject:self]) [gTrackedRenderers addObject:self];
+        if ([gObservedAudioBackend isEqualToString:@"none yet"]) gObservedAudioBackend = @"HAMSBARAudioTrackRenderer";
+    }
+    %orig(volume * gCurrentNativeGain);
+}
+
+%end
+%end
+
 %ctor {
     NSMutableDictionary *dict = [NSMutableDictionary dictionaryWithDictionary:[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"]];
     if (dict[@"appleCrossfade"] == nil) dict[@"appleCrossfade"] = @(1);
@@ -488,10 +829,15 @@ static void YTMFeedLiveCrossfadeTime(YTPlayerViewController *pvc, CGFloat curren
 
     YTMInstallCrossfadeAdapters();
     %init;
-    if (objc_getClass("MLHAMPlayer")) {
-        %init(MLHAMGroup);
-    }
-    if (objc_getClass("HAMPlayer")) {
-        %init(HAMGroup);
-    }
+    if (objc_getClass("MLHAMPlayer")) %init(MLHAMGroup);
+    if (objc_getClass("HAMPlayer")) %init(HAMGroup);
+    if (objc_getClass("YTColdConfigIosPlayerClientSharedConfigImpl")) %init(NativeXfadeSharedConfigGroup);
+    if (objc_getClass("YTColdConfigMusicPlaybackClientConfigImpl")) %init(NativeXfadePlaybackConfigGroup);
+    if (objc_getClass("YTMSettingsImpl")) %init(NativeXfadeSettingsGroup);
+    if (objc_getClass("YTUserDefaults")) %init(NativeXfadeUserDefaultsGroup);
+    if (objc_getClass("YTMCrossfadeTransitionPolicy")) %init(NativeXfadePolicyGroup);
+    if (objc_getClass("YTMPlayerSequencerController")) %init(NativeXfadeSequencerGroup);
+    if (objc_getClass("MLHAMMultiPlayer")) %init(MLHAMMultiGroup);
+    if (objc_getClass("MLHAMQueuePlayer")) %init(MLHAMQueueGroup);
+    if (objc_getClass("HAMSBARAudioTrackRenderer")) %init(HAMSBARGroup);
 }
