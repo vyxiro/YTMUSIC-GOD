@@ -8,7 +8,15 @@
 </p>
 
 <p align="center">
-The best tweak for the YouTube Music on iOS.
+The best tweak for the YouTube Music on iOS — featuring **Liquid Glass & Ambient Mode** + **Audio Crossfade**.
+</p>
+
+## Liquid Glass UI Showcase (On-Device)
+
+<p align="center">
+  <img src="assets/screenshots/liquid_glass_3.jpeg" width="30%" alt="Home Liquid Glass" />
+  <img src="assets/screenshots/liquid_glass_2.jpeg" width="30%" alt="Now Playing Liquid Glass" />
+  <img src="assets/screenshots/liquid_glass_1.jpeg" width="30%" alt="Search & Recent Searches Liquid Glass" />
 </p>
 
 ## Download Links
