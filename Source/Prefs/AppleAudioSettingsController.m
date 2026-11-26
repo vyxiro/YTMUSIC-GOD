@@ -2,11 +2,14 @@
 #import "../LGCrossfade.h"
 #import "../LiquidGlass.h"
 
+extern NSString *YTMObservedAudioBackend(void);
+
 @interface AppleAudioSettingsController ()
 @property (nonatomic, strong) UILabel *crossfadeDurationLabel;
 @property (nonatomic, strong) UILabel *crossfadeStatusLabel;
 @property (nonatomic, strong) UISlider *crossfadeSlider;
 @property (nonatomic, strong) UILabel *cacheSizeLabel;
+@property (nonatomic, strong) NSTimer *statusTimer;
 @end
 
 @implementation AppleAudioSettingsController
@@ -27,6 +30,32 @@
         [self.tableView.widthAnchor constraintEqualToAnchor:self.view.widthAnchor],
         [self.tableView.heightAnchor constraintEqualToAnchor:self.view.heightAnchor]
     ]];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self refreshCrossfadeStatus];
+    [self.statusTimer invalidate];
+    __weak typeof(self) w = self;
+    self.statusTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(__unused NSTimer *t) {
+        [w refreshCrossfadeStatus];
+    }];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self.statusTimer invalidate];
+    self.statusTimer = nil;
+}
+
+- (void)dealloc {
+    [self.statusTimer invalidate];
+}
+
+- (void)refreshCrossfadeStatus {
+    if (self.crossfadeStatusLabel) {
+        self.crossfadeStatusLabel.text = [NSString stringWithFormat:@"%@\n%@", LGCrossfade.shared.status, YTMObservedAudioBackend()];
+    }
 }
 
 #pragma mark - Table View Data Source
@@ -81,7 +110,7 @@
     if (indexPath.section == 0) {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Crossfade Engine Status";
-            cell.detailTextLabel.text = LGCrossfade.shared.status;
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@", LGCrossfade.shared.status, YTMObservedAudioBackend()];
             cell.detailTextLabel.numberOfLines = 0;
             self.crossfadeStatusLabel = cell.detailTextLabel;
         } else if (indexPath.row == 1) {

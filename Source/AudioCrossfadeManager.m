@@ -104,6 +104,7 @@ static NSString * const kGaplessBypassKey = @"appleCrossfadeGaplessBypass";
         self.activePlayer = player;
     }
     self.currentVideoID = videoID;
+    [self loadSettings];
 
     // If manual skip was triggered, resume full volume immediately without crossfade in
     if (self.isManualSkip || !self.crossfadeEnabled) {

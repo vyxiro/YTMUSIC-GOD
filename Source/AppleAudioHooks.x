@@ -23,6 +23,8 @@
 
 static __weak YTPlayerViewController *gCurrentPlayerVC = nil;
 static __weak id gCurrentNowPlayingVC = nil;
+static NSURL *gCurrentTrackStreamURL = nil;
+static NSString *gCurrentStreamVideoID = nil;
 
 static NSHashTable *gTrackedRenderers = nil;
 static NSHashTable *gTrackedHAMPlayers = nil;
@@ -71,6 +73,34 @@ static void YTMApplyNativeGainToObject(id obj, float gain) {
     tApplyingNativeGain = NO;
 }
 
+static NSURL *YTMExtractBestAudioStreamURL(YTPlayerViewController *pvc) {
+    if (!pvc || ![pvc respondsToSelector:@selector(playerResponse)]) return nil;
+    @try {
+        YTPlayerResponse *resp = pvc.playerResponse;
+        YTIStreamingData *sd = resp.playerData.streamingData;
+        if (!sd) return nil;
+
+        // Prefer progressive audio/mp4 stream URL (instant seek & low memory in AVPlayer tail)
+        if ([sd respondsToSelector:@selector(adaptiveFormatsArray)]) {
+            for (YTIFormatStream *fs in sd.adaptiveFormatsArray) {
+                NSString *urlStr = [fs respondsToSelector:@selector(URL)] ? fs.URL : nil;
+                if (urlStr.length == 0) continue;
+                if ([fs respondsToSelector:@selector(mimeType)]) {
+                    NSString *mime = [fs performSelector:@selector(mimeType)];
+                    if ([mime isKindOfClass:[NSString class]] && [mime containsString:@"audio/mp4"]) {
+                        return [NSURL URLWithString:urlStr];
+                    }
+                }
+            }
+        }
+        // Fallback to HLS manifest URL
+        if ([sd respondsToSelector:@selector(hlsManifestURL)] && sd.hlsManifestURL.length > 0) {
+            return [NSURL URLWithString:sd.hlsManifestURL];
+        }
+    } @catch (__unused NSException *e) {}
+    return nil;
+}
+
 static void YTMInstallCrossfadeAdapters(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -97,29 +127,50 @@ static void YTMInstallCrossfadeAdapters(void) {
             for (id e in engines) YTMApplyNativeGainToObject(e, gain);
         };
 
-        // Use crash-free Dip mode (smooth fade out -> natural queue advance -> smooth fade in)
-        xf.advanceToNext = nil;
-        xf.currentTrackAsset = nil;
+        xf.advanceToNext = ^BOOL {
+            id npVC = gCurrentNowPlayingVC;
+            if (npVC && [npVC respondsToSelector:@selector(didTapNextButton)]) {
+                gProgrammaticAdvance = YES;
+                @try {
+                    [npVC didTapNextButton];
+                } @catch (__unused NSException *e) {
+                    gProgrammaticAdvance = NO;
+                    return NO;
+                }
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    gProgrammaticAdvance = NO;
+                });
+                return YES;
+            }
+            return NO;
+        };
+
+        xf.currentStreamURL = ^NSURL * {
+            @synchronized(gAudioLock) {
+                if (gCurrentTrackStreamURL) return gCurrentTrackStreamURL;
+            }
+            YTPlayerViewController *pvc = gCurrentPlayerVC;
+            return pvc ? YTMExtractBestAudioStreamURL(pvc) : nil;
+        };
     });
 }
 
-static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat current, CGFloat total) {
-    if (LGNowPlayingHookCount() > 0 || total <= 0) return;
+static void YTMFeedLiveCrossfadeTime(YTPlayerViewController *pvc, CGFloat current, CGFloat total) {
+    if (total <= 0 || current < 0) return;
     static CFTimeInterval sLastFeed = 0;
     CFTimeInterval now = CACurrentMediaTime();
-    if (now - sLastFeed < 1.5) return;
+    if (now - sLastFeed < 0.35) return;
     sLastFeed = now;
-    YTIVideoDetails *vd = pvc.playerResponse.playerData.videoDetails;
-    NSString *title = vd.title ?: pvc.currentVideoID ?: @"";
-    NSString *artist = vd.author ?: @"";
-    NSDictionary *info = @{
-        MPMediaItemPropertyTitle: title,
-        MPMediaItemPropertyArtist: artist,
-        MPNowPlayingInfoPropertyElapsedPlaybackTime: @(current),
-        MPMediaItemPropertyPlaybackDuration: @(total),
-        MPNowPlayingInfoPropertyPlaybackRate: @(1.0)
-    };
-    [[LGCrossfade shared] noteNowPlayingInfo:info];
+
+    NSString *vid = [pvc respondsToSelector:@selector(currentVideoID)] ? pvc.currentVideoID : nil;
+    if (vid.length > 0 && ![vid isEqualToString:gCurrentStreamVideoID]) {
+        NSURL *u = YTMExtractBestAudioStreamURL(pvc);
+        @synchronized(gAudioLock) {
+            gCurrentStreamVideoID = vid;
+            gCurrentTrackStreamURL = u;
+        }
+    }
+    [[LGCrossfade shared] noteLiveTime:(double)current total:(double)total trackID:vid];
 }
 
 #pragma mark - Playback Controller & Crossfade Hooks
@@ -141,10 +192,17 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
     YTMInstallCrossfadeAdapters();
     @try {
         NSString *videoID = [self currentVideoID];
+        NSURL *streamURL = YTMExtractBestAudioStreamURL(self);
+        @synchronized(gAudioLock) {
+            gCurrentStreamVideoID = videoID;
+            gCurrentTrackStreamURL = streamURL;
+        }
+
         [[AudioCrossfadeManager sharedInstance] registerPlayerViewController:self];
         [[AudioCrossfadeManager sharedInstance] notifyTrackActivatedWithVideoID:videoID player:nil];
+        [[LGCrossfade shared] noteTrackActivated:videoID];
         [[NetworkBufferOptimizer sharedInstance] notifyNewTrackLoadedWithVideoID:videoID];
-        YTMFeedFallbackCrossfadeTime(self, [self currentVideoMediaTime], [self currentVideoTotalMediaTime]);
+        YTMFeedLiveCrossfadeTime(self, [self currentVideoMediaTime], [self currentVideoTotalMediaTime]);
 
         // Safe artwork extraction for Ambient Mode
         YTPlayerResponse *response = self.playerResponse;
@@ -180,7 +238,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
         if (total > 0) {
             [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
             [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
-            YTMFeedFallbackCrossfadeTime(self, current, total);
+            YTMFeedLiveCrossfadeTime(self, current, total);
         }
     } @catch (NSException *e) {}
 }
@@ -193,7 +251,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
         if (total > 0) {
             [[AudioCrossfadeManager sharedInstance] didUpdatePlaybackTime:current duration:total];
             [[NetworkBufferOptimizer sharedInstance] trackProgressDidChangeCurrent:current total:total];
-            YTMFeedFallbackCrossfadeTime(self, current, total);
+            YTMFeedLiveCrossfadeTime(self, current, total);
         }
     } @catch (NSException *e) {}
 }
@@ -208,7 +266,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
 
 %end
 
-#pragma mark - Now Playing Liquid Glass Backdrop
+#pragma mark - Now Playing VC Hooks
 
 %hook YTMNowPlayingViewController
 
@@ -245,7 +303,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
 
 %end
 
-#pragma mark - AVFoundation Layer Hooks
+#pragma mark - AVFoundation & HAMPlayer Audio Backend Hooks
 
 %hook AVSampleBufferAudioRenderer
 
@@ -283,7 +341,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
         if (![gTrackedRenderers containsObject:self]) [gTrackedRenderers addObject:self];
         if ([gObservedAudioBackend isEqualToString:@"none yet"]) gObservedAudioBackend = @"AVSampleBufferAudioRenderer";
         targetGain = gCurrentNativeGain;
-        needsUpdate = (targetGain < 0.999f);
+        needsUpdate = (fabsf(((AVSampleBufferAudioRenderer *)self).volume - targetGain) > 0.02f);
     }
     if (needsUpdate) {
         YTMApplyNativeGainToObject(self, targetGain);
@@ -295,6 +353,33 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
 
 %group MLHAMGroup
 %hook MLHAMPlayer
+
+- (instancetype)initWithVideo:(id)a playerConfig:(id)b stickySettings:(id)c playerViewProvider:(id)d latencyLogger:(id)e reloadContext:(id)f mediaPlayerResources:(id)g recompositeProvider:(id)h {
+    id obj = %orig;
+    if (obj) {
+        YTMInstallCrossfadeAdapters();
+        @synchronized(gAudioLock) {
+            [gTrackedHAMPlayers addObject:obj];
+            gObservedAudioBackend = @"MLHAMPlayer+AVSampleBufferAudioRenderer";
+            if (gCurrentNativeGain < 0.999f) YTMApplyNativeGainToObject(obj, gCurrentNativeGain);
+        }
+    }
+    return obj;
+}
+
+- (instancetype)initWithVideo:(id)a playerConfig:(id)b stickySettings:(id)c playerViewProvider:(id)d playerConfiguration:(id)e queuePlayer:(id)f latencyLogger:(id)g reloadContext:(id)h mediaPlayerResources:(id)i recompositeProvider:(id)j {
+    id obj = %orig;
+    if (obj) {
+        YTMInstallCrossfadeAdapters();
+        @synchronized(gAudioLock) {
+            [gTrackedHAMPlayers addObject:obj];
+            gObservedAudioBackend = @"MLHAMPlayer+AVSampleBufferAudioRenderer";
+            if (gCurrentNativeGain < 0.999f) YTMApplyNativeGainToObject(obj, gCurrentNativeGain);
+        }
+    }
+    return obj;
+}
+
 - (void)setVolume:(float)volume {
     if (tApplyingNativeGain) {
         %orig(volume);
@@ -306,11 +391,21 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
     }
     %orig(volume * gCurrentNativeGain);
 }
+
 %end
 %end
 
 %group HAMGroup
 %hook HAMPlayer
+
+- (void)setStartedTrackRenderers:(id)arg1 {
+    %orig;
+    @synchronized(gAudioLock) {
+        if (![gTrackedHAMPlayers containsObject:self]) [gTrackedHAMPlayers addObject:self];
+    }
+    if (gCurrentNativeGain < 0.999f) YTMApplyNativeGainToObject(self, gCurrentNativeGain);
+}
+
 - (void)setVolume:(float)volume {
     if (tApplyingNativeGain) {
         %orig(volume);
@@ -321,6 +416,7 @@ static void YTMFeedFallbackCrossfadeTime(YTPlayerViewController *pvc, CGFloat cu
     }
     %orig(volume * gCurrentNativeGain);
 }
+
 %end
 %end
 

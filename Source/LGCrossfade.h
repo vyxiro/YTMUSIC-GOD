@@ -1,4 +1,5 @@
-// LGCrossfade.h : Apple Music-style crossfade engine (equal-power, 1-12 s, default 6 s).
+// LGCrossfade.h : Apple Music-style equal-power crossfade engine (1-12s, default 6s).
+// Supports seamless dual-stream Overlap via main-thread preloaded AVPlayer tail + automatic smart Dip fallback.
 // Settings keys: LG_xfade (BOOL), LG_xfade_secs (double 1...12, default 6).
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
@@ -10,14 +11,16 @@ typedef NS_ENUM(NSInteger, LGXfadeMode) { LGXfadeOff = 0, LGXfadeDip = 1, LGXfad
 @property (nonatomic, readonly) BOOL enabled;
 @property (nonatomic, readonly) NSTimeInterval seconds;
 @property (nonatomic, readonly) LGXfadeMode mode;
-@property (nonatomic, readonly) NSString *status;     // for a live status row in Settings
+@property (nonatomic, readonly) NSString *status;
 
-// ---- adapters. All are called on a background queue: hop to main yourself if needed. ----
+// ---- adapters ----
 @property (nonatomic, copy) void (^setNativeGain)(float gain);
 @property (nonatomic, copy) BOOL (^advanceToNext)(void);
-@property (nonatomic, copy) AVURLAsset *(^currentTrackAsset)(void);
+@property (nonatomic, copy) NSURL *(^currentStreamURL)(void);
 
-// Call from the MPNowPlayingInfoCenter hook (LGHooks.x). The engine extrapolates elapsed time itself.
+// Input feeds: MPNowPlayingInfoCenter hook + live YTPlayerViewController time observer.
 - (void)noteNowPlayingInfo:(NSDictionary *)info;
-- (void)cancel;                                       // restore gain, stop ramps, drop the tail player
+- (void)noteLiveTime:(double)elapsed total:(double)total trackID:(NSString *)trackID;
+- (void)noteTrackActivated:(NSString *)trackID;
+- (void)cancel;
 @end
