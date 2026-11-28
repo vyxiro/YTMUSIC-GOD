@@ -8,8 +8,15 @@
 </p>
 
 <p align="center">
-The best tweak for the YouTube Music on iOS — featuring **Liquid Glass & Ambient Mode** + **Audio Crossfade**.
+The ultimate tweak for YouTube Music on iOS — enhanced by <a href="https://github.com/vyxiro"><strong>@vyxiro</strong></a> with a full <strong>iOS 26 Liquid Glass UI/UX Overhaul</strong>, <strong>Artwork Ambient Mode</strong>, <strong>Download Fixes</strong>, and <strong>Apple Audio &amp; Crossfade Integration</strong>.
 </p>
+
+## What's New & Contributed by [@vyxiro](https://github.com/vyxiro)
+
+- **Full iOS 26 Liquid Glass UI/UX:** Specular glass rims, blurred live album-artwork backdrops, dynamic accent palette extraction (`LGTheme`), floating capsule bottom tab bar, aligned 5-button Now Playing controls, and transparent Related / Comments / Save to Playlist / Search / Recent Searches / Library / Notifications / Settings surfaces.
+- **Playlists-Style Downloads & Crash Fix:** Redesigned Downloads section with playlist-style cards and fixed the Now Playing download button crash.
+- **Native Dual-Deck Audio Crossfade (`Apple Audio & Network`):** Unlocked YouTube Music's `MLHAMMultiPlayer` / `YTPersistentAudioFadeController` pipeline alongside Gapless Album Detection, Deep Buffer Mode (`120s`), and Smart Next-Track Pre-Fetch (`YTM v9.47.2`).
+- **Pre-Packaged Sideloading IPA & CI Pipeline:** Fixed `Package_IPA` Weak-Dylib Mach-O injection before `LC_CODE_SIGNATURE` and configured GitHub Actions (`macos-15-intel`) for fast automated builds.
 
 ## Liquid Glass UI Showcase (On-Device)
 
@@ -21,13 +28,16 @@ The best tweak for the YouTube Music on iOS — featuring **Liquid Glass & Ambie
 
 ## Download Links
 
-* **Jailbreak:**
-Add __[https://ginsu.dev/repo](https://ginsu.dev/repo)__ to your favorite installer and download latest version from there, or from __[Releases](https://github.com/ginsudev/YTMusicUltimate/releases)__ page.
+* **Pre-Patched IPA & Standalone Dylib (Sideloading — AltStore / SideStore / Sideloadly / Feather):**
+  Download the latest **`YouTubeMusic_v9.47_LiquidGlass_Ultimate.ipa`** or **`YTMusicUltimate.dylib`** directly from **[GitHub Releases](https://github.com/vyxiro/YTMUSIC-GOD/releases)**.
 
-(arm.deb version for Rootful and arm64.deb version for Rootless devices)
+* **Jailbreak / Custom Injection:**
+  Grab the latest release assets from **[Releases](https://github.com/vyxiro/YTMUSIC-GOD/releases)** or build from source using Theos (`make clean package SIDELOADING=1`).
 
-* **Sideloading:**
-  We no longer provide a sideloading IPA but you can build one yourself, keep reading:
+## Credits & Contributors
+
+* **[@vyxiro](https://github.com/vyxiro)** — Liquid Glass & Ambient UI overhaul, Downloads redesign & crash fix, Native Audio Crossfade & Network enhancements, Mach-O IPA injection tooling, and `v9.47.2` build maintenance.
+* **Ginsu & Dayanch96** — Original creators of [YTMusicUltimate](https://github.com/ginsudev/YTMusicUltimate).
 
 ## How to build a YTMusicUltimate IPA by yourself using Github actions
 
@@ -64,4 +74,4 @@ If the github action works and you cannot find where you can download the result
 
 
 
-Made with ❤ by Ginsu and Dayanch96
+Made with ❤️ by Ginsu & Dayanch96 • Enhanced by [@vyxiro](https://github.com/vyxiro)
